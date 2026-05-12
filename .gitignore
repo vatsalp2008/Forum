@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv / build
+build/
+dist/
+*.egg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# FORUM data
+personas/data/raw/
+personas/data/built/
+backtest/runs/
+*.duckdb
+*.duckdb.wal
+
+# Local secrets / env
+.env
+.env.local
+.envrc
+
+# Run artifacts
+runs/
+transcripts/
+
+# LangGraph local cache
+.langgraph_cache/
+
+# ANES codebook PDF (large reference doc; user-downloaded, not redistributed)
+anes_timeseries_*.pdf
+
+# Local Claude Code settings (user-specific)
+.claude/

@@ -1,0 +1,50 @@
+measure_id: wa_i1639
+title: "Washington Initiative 1639 — Firearm Safety Measures"
+year: 2018
+state: WA
+topic: firearms
+
+# Public election results (Washington Secretary of State certified).
+ground_truth:
+  yes_pct: 59.3
+  no_pct: 40.7
+  passed: true
+
+segment_results: {}
+
+framing: >-
+  Washington State is considering a set of firearm safety measures including
+  raising the minimum age for purchasing semi-automatic rifles to 21,
+  requiring enhanced background checks and waiting periods for those
+  purchases, and creating new requirements around safe storage of firearms.
+  Should the measures be enacted?
+
+briefing: >-
+  The proposal increases the minimum age for purchasing semi-automatic
+  rifles from 18 to 21, mandates enhanced background checks, imposes a
+  10-day waiting period for those purchases, requires completion of a
+  firearms safety training course, and creates legal liability for owners
+  who fail to securely store firearms accessed by prohibited persons or
+  used in crimes. Supporters argue the measures reduce firearm violence and
+  align rifle rules with handgun rules. Opponents argue the measures
+  burden lawful gun owners, are unconstitutional under the Second
+  Amendment, and would not have prevented recent high-profile incidents.
+
+briefing_sources:
+  - "Washington State Voters' Pamphlet, Initiative Measure No. 1639 (2018)"
+  - "Alliance for Gun Responsibility (campaign in support)"
+  - "National Rifle Association opposition statement"
+  - "Washington State Attorney General fiscal/legal analysis"
+
+pro_arguments:
+  - "Aligns minimum-age and background-check standards across firearm types."
+  - "Safe-storage requirements reduce accidental shootings and unauthorized access."
+  - "Enhanced background checks identify prohibited purchasers more reliably."
+
+con_arguments:
+  - "Burdens lawful gun owners with delays and training requirements that don't address criminal misuse."
+  - "Raising the age to 21 limits constitutional rights of legal adults."
+  - "Storage liability may discourage self-defense readiness."
+  - "Existing federal background checks are sufficient; new state-level checks duplicate effort."
+
+n_rounds: 5

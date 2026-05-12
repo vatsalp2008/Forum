@@ -1,0 +1,56 @@
+measure_id: wa_i1631
+title: "Washington Initiative 1631 — Carbon Pollution Fee"
+year: 2018
+state: WA
+topic: climate
+
+# Public election results (Washington Secretary of State certified).
+# Verify exact percentages from sos.wa.gov before publication.
+ground_truth:
+  yes_pct: 43.4
+  no_pct: 56.6
+  passed: false
+
+# Demographic crosstabs from public exit polls / certified results, where available.
+# v0 leaves these stubbed; user fills in from sos.wa.gov county results +
+# CES-style demographic estimates.
+segment_results: {}
+
+# Framing presented to FORUM agents. MUST NOT name the year of the vote
+# nor reveal the outcome (see docs/methodology.md §4).
+framing: >-
+  Washington State is considering a policy that would impose a fee on large
+  emitters of carbon pollution, generating revenue used for clean-energy
+  projects, environmental protection, and assistance for affected workers
+  and communities. Should the policy be enacted?
+
+briefing: >-
+  The proposal sets a fee on carbon emissions starting at $15 per metric ton
+  and rising annually, with revenue directed to clean-energy projects,
+  forest health, and aid to communities affected by climate change or
+  energy-cost increases. Major emitters such as power plants and oil
+  refineries would pay the fee. Some industries (energy-intensive
+  trade-exposed manufacturers, certain transportation fuels) receive
+  partial exemptions. Supporters argue the policy reduces emissions and
+  funds a just transition; opponents argue it raises consumer costs,
+  exempts too many polluters, and is regressive in its energy-price
+  pass-through.
+
+briefing_sources:
+  - "Washington State Voters' Pamphlet, Initiative Measure No. 1631 (full text and explanatory statement, 2018)"
+  - "Washington Department of Ecology, Carbon Pollution Fee fiscal note (2018)"
+  - "Sightline Institute analysis, Initiative 1631"
+  - "Western States Petroleum Association opposition statement"
+
+pro_arguments:
+  - "Reducing carbon emissions addresses worsening wildfires, smoke seasons, and ocean acidification affecting WA fisheries."
+  - "Revenue is dedicated by statute to clean-energy investment and aid to affected workers and communities."
+  - "WA's energy mix (substantial hydro) means consumer cost impacts are smaller than in other states."
+
+con_arguments:
+  - "Energy-intensive trade-exposed industries are exempted, reducing the policy's emissions impact."
+  - "The fee will be passed through to consumers via gasoline and utility prices."
+  - "An unelected board allocates revenue, weakening democratic accountability."
+  - "Other states and countries lacking similar policies will undercut WA producers."
+
+n_rounds: 5
