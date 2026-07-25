@@ -26,6 +26,7 @@ from backtest.metrics import (
 from forum.budget import DEFAULT_DELIBERATION_BUDGET_USD, CostMeter
 from forum.graph import run_deliberation
 from forum.llm import LLMClient
+from forum.refusal import RefusalError, check_output, check_request
 from forum.state import Vote
 from personas.db import connect, get_source_versions
 from personas.sample import sample_personas
@@ -47,6 +48,12 @@ def run_one(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     measure: LoadedMeasure = load_measure(measure_id)
+
+    # Binding refusal layer (methodology §6), input side: halt before any LLM
+    # cost if the framing matches a refused category.
+    req = check_request(measure.spec.framing)
+    if req.refused:
+        raise RefusalError(req)
 
     con = connect()
     source_versions = get_source_versions(con)
@@ -114,10 +121,18 @@ def run_one(
         notes=notes,
     )
 
+    # Binding refusal layer (methodology §6), output side: the Output
+    # Synthesizer refuses to emit content that looks like messaging guidance
+    # or an election forecast, regardless of how clean the input was.
+    report_text = report.render()
+    out = check_output(report_text)
+    if out.refused:
+        raise RefusalError(out)
+
     # Include the seed in the filename so multiple seeds of the same measure
     # (e.g. a sensitivity sweep sharing one run_id) do not clobber each other.
     stem = f"{measure_id}-seed{seed}"
-    (run_dir / f"{stem}.md").write_text(report.render())
+    (run_dir / f"{stem}.md").write_text(report_text)
     (run_dir / f"{stem}.json").write_text(
         json.dumps(_serialize_run(final, asdict(report)), default=str, indent=2)
     )

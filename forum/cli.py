@@ -38,7 +38,7 @@ _load_dotenv()
 
 from backtest.measure_loader import list_measures
 from backtest.run import run_all, run_one, run_sensitivity
-from forum.refusal import check_request
+from forum.refusal import RefusalError, check_request
 from personas.db import connect, get_source_versions
 
 app = typer.Typer(help="FORUM — synthetic deliberative-polling research artifact.")
@@ -90,7 +90,11 @@ def deliberate(
 ) -> None:
     """Run a single deliberation on a measure."""
     measure_id = measure_id if measure_id.startswith("wa_") else f"wa_{measure_id}"
-    report = run_one(measure_id, n_personas=n, seed=seed, stub=stub, budget_usd=budget)
+    try:
+        report = run_one(measure_id, n_personas=n, seed=seed, stub=stub, budget_usd=budget)
+    except RefusalError as e:
+        console.print(f"[red]REFUSED:[/red] {e}")
+        raise typer.Exit(code=2)
     console.print(report.render())
 
 
@@ -105,7 +109,11 @@ def backtest(
     mids = None
     if measures:
         mids = [m if m.startswith("wa_") else f"wa_{m}" for m in measures]
-    reports = run_all(measure_ids=mids, n_personas=n, seed=seed, stub=stub)
+    try:
+        reports = run_all(measure_ids=mids, n_personas=n, seed=seed, stub=stub)
+    except RefusalError as e:
+        console.print(f"[red]REFUSED:[/red] {e}")
+        raise typer.Exit(code=2)
     console.print(f"[green]Wrote {len(reports)} reports.[/green]")
 
 

@@ -35,6 +35,19 @@ class RefusalResult:
     reason: str | None = None
 
 
+class RefusalError(RuntimeError):
+    """Raised when the pipeline refuses a request or an output.
+
+    Per docs/methodology.md §6 the refusal layer is *binding*: a refused
+    framing halts before any LLM cost, and a refused output blocks the report
+    from being written. Carries the originating RefusalResult for callers.
+    """
+
+    def __init__(self, result: RefusalResult) -> None:
+        self.result = result
+        super().__init__(result.reason or "refused")
+
+
 def check_request(framing: str, vote_date: date | None = None) -> RefusalResult:
     """Apply input-side and date-based refusal checks.
 
