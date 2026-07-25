@@ -42,7 +42,7 @@ def run_one(
     budget_usd: float = DEFAULT_DELIBERATION_BUDGET_USD,
     run_id: str | None = None,
 ) -> MeasureReport:
-    run_id = run_id or time.strftime("%Y%m%d-%H%M%S")
+    run_id = run_id or time.strftime("%Y%m%d-%H%M%S") + ("-stub" if stub else "")
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -107,6 +107,7 @@ def run_one(
         opinion_change=delta,
         cost_usd=meter.spent_usd,
         seed=seed,
+        mode=final.get("mode", "stub" if stub else "live"),
         model_version=final.get("model_version", "stub"),
         prompt_version=final.get("prompt_version", "stub"),
         persona_lib_versions=source_versions or {"acs": "stub", "anes": "stub"},
@@ -132,7 +133,7 @@ def run_all(
     from backtest.measure_loader import list_measures
     if measure_ids is None:
         measure_ids = list_measures()
-    run_id = time.strftime("%Y%m%d-%H%M%S")
+    run_id = time.strftime("%Y%m%d-%H%M%S") + ("-stub" if stub else "")
     reports = []
     for mid in measure_ids:
         reports.append(
@@ -155,7 +156,7 @@ def run_sensitivity(
         measure_ids = list_measures()
     measure_ids = list(measure_ids)
     seeds = list(seeds)
-    run_id = time.strftime("%Y%m%d-%H%M%S") + "-sens"
+    run_id = time.strftime("%Y%m%d-%H%M%S") + "-sens" + ("-stub" if stub else "")
 
     rows: list[SensitivityRow] = []
     for mid in measure_ids:

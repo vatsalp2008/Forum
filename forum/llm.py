@@ -29,6 +29,15 @@ JSON_MODE_SUPPORTED_MODELS = {
 }
 
 
+class LLMError(RuntimeError):
+    """Raised when a live LLM call fails after all retries.
+
+    We deliberately do NOT degrade to a stub response in live mode: a research
+    artifact must never silently emit fabricated data into a "real" run. Callers
+    that want stub data must construct the client with stub=True explicitly.
+    """
+
+
 @dataclass
 class LLMResponse:
     text: str
@@ -115,14 +124,13 @@ class LLMClient:
                 # brief backoff for transient rate-limit / 5xx
                 time.sleep(0.5 * (attempt + 1))
         if last_err is not None:
-            # Quota / rate-limit / network errors: degrade to a stub response
-            # rather than aborting the whole deliberation. For json_mode the
-            # stub already returns valid JSON; preserve it untouched so
-            # downstream parsing still works.
-            stub = _stub_generate(system, user, json_mode, seed=seed)
-            if not json_mode:
-                stub.text = f"[LLM error fallback: {type(last_err).__name__}] " + stub.text
-            return stub
+            # Live mode (we return early above when self.stub). Quota /
+            # rate-limit / network errors abort the run loudly rather than
+            # silently fabricating data. Use stub=True for an offline run.
+            raise LLMError(
+                f"LLM call to {model!r} failed after 3 attempts: "
+                f"{type(last_err).__name__}: {last_err}"
+            ) from last_err
         text = (resp.text or "").strip()
         if json_mode:
             text = strip_code_fences(text)

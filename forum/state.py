@@ -55,5 +55,6 @@ class DeliberationState(TypedDict, total=False):
     cost_usd: float
     finished: bool
     seed: int
+    mode: str  # "stub" (no LLM calls) or "live" (real LLM calls)
     model_version: str
     prompt_version: str

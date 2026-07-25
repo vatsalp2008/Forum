@@ -146,6 +146,7 @@ class MeasureReport:
     opinion_change: dict
     cost_usd: float
     seed: int
+    mode: str
     model_version: str
     prompt_version: str
     persona_lib_versions: dict
@@ -155,6 +156,8 @@ class MeasureReport:
         lines = [
             f"# Backtest report: {self.measure_id}",
             "",
+            f"- Mode: {self.mode.upper()}"
+            + ("  ⚠️  STUB — pseudo-random, not a real result" if self.mode == "stub" else ""),
             f"- Personas: {self.n_personas}",
             f"- Rounds: {self.n_rounds}",
             f"- Seed: {self.seed}",

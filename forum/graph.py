@@ -258,7 +258,11 @@ def run_deliberation(
         "cost_usd": 0.0,
         "finished": False,
         "seed": seed,
-        "model_version": f"{DEFAULT_CITIZEN_MODEL}+{DEFAULT_MODERATOR_MODEL}",
+        "mode": "stub" if llm.stub else "live",
+        "model_version": (
+            "stub" if llm.stub
+            else f"{DEFAULT_CITIZEN_MODEL}+{DEFAULT_MODERATOR_MODEL}"
+        ),
         "prompt_version": PROMPT_VERSION,
     }
     final = graph.invoke(initial, config={"recursion_limit": 50})
