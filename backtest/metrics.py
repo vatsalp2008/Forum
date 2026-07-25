@@ -124,7 +124,7 @@ def render_sensitivity_report(rows: list[SensitivityRow], n_personas: int) -> st
         "",
         "## Interpretation guide",
         "",
-        "- **Low std dev (<2 pts) AND low MAE (<3 pts)**: result is stable. Either real signal OR contamination — a contamination probe (planned) is needed to disambiguate.",
+        "- **Low std dev (<2 pts) AND low MAE (<3 pts)**: result is stable. Either real signal OR contamination — run `forum contamination-probe` to disambiguate.",
         "- **Low std dev AND high MAE**: methodology is biased but reproducible. Investigate per-segment errors.",
         "- **High std dev (>5 pts)**: result is noise-dominated. Increase N or rethink methodology.",
         "- **Wide spread relative to MAE**: a single-seed report would be misleading. Always report variance.",

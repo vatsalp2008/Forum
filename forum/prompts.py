@@ -116,6 +116,21 @@ Output only your statement text. No preamble.
 """
 
 
+CONTAMINATION_PROBE_PROMPT = """\
+You are being audited for prior knowledge. Do NOT role-play a citizen and do NOT deliberate.
+
+For the historical U.S. ballot measure below, report whether you already know its certified real-world outcome from your training data, and if so, the certified percentage of votes cast in favor ("yes").
+
+Measure: {title} ({state}, {year})
+Framing: {framing}
+
+Be honest. If you are not confident you recall the *actual certified result*, set "knows" to false and "yes_pct" to null rather than guessing. A guess is not knowledge; only report a number you actually remember.
+
+Output a single JSON object on one line, no other text:
+{{"knows": true/false, "yes_pct": <number 0-100 or null>, "confidence": <float 0-1>, "note": "<one short sentence>"}}
+"""
+
+
 CRITIC_FACT_CHECK_PROMPT = """\
 You are a fact-checker reviewing one statement from a citizen deliberation.
 

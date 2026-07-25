@@ -159,6 +159,10 @@ def _stub_generate(
                 "confidence": round(rng.uniform(0.4, 0.9), 2),
                 "rationale": "stub rationale (no LLM in this run).",
             }
+        elif '"knows"' in user:
+            # Contamination probe: stub honestly reports no prior knowledge.
+            obj = {"knows": False, "yes_pct": None, "confidence": 0.0,
+                   "note": "stub probe; no LLM in this run."}
         elif '"flagged"' in user:
             obj = {"flagged": False, "note": ""}
         else:

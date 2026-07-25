@@ -139,6 +139,32 @@ def sensitivity(
         )
 
 
+@app.command("contamination-probe")
+def contamination_probe(
+    measures: list[str] = typer.Option(None, help="Restrict to specific measure ids"),
+    seeds: str = typer.Option("1", help="Comma-separated seed list"),
+    stub: bool = typer.Option(False, help="Run without LLM calls"),
+) -> None:
+    """Probe the model's cold prior knowledge of each measure's outcome.
+
+    Measures LLM-priors contamination — the backtest's central confound.
+    """
+    from backtest.contamination import run_contamination_probe
+
+    mids = None
+    if measures:
+        mids = [m if m.startswith("wa_") else f"wa_{m}" for m in measures]
+    seed_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
+    results = run_contamination_probe(measure_ids=mids, seeds=seed_list, stub=stub)
+    for r in results:
+        my = f"{r.model_yes_pct:.1f}%" if r.model_yes_pct is not None else "—"
+        color = "red" if r.flag in ("HIGH", "MODERATE") else "green"
+        console.print(
+            f"[{color}]{r.measure_id}[/{color}] (seed {r.seed}) | knows={r.model_knows} "
+            f"| model {my} vs actual {r.actual_yes_pct:.1f}% | flag {r.flag}"
+        )
+
+
 @app.command("list-measures")
 def cmd_list_measures() -> None:
     """List available measure YAML files."""
