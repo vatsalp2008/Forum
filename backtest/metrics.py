@@ -7,9 +7,14 @@ the 0..100 scale; all probabilities in the 0..1 scale.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import random
+from dataclasses import dataclass, field
 
 from forum.state import Vote
+
+# Minimum cell size for a per-segment result to be reported (k-anonymity /
+# small-N suppression, matching the persona sampler's K_ANONYMITY_MIN).
+SEGMENT_MIN_N = 5
 
 
 def predicted_yes_pct(post_votes: list[Vote], threshold: float = 0.5) -> float:
@@ -38,6 +43,84 @@ def brier_score(predicted_yes_prob: float, actual_passed: bool) -> float:
     """Brier score: (p - o)^2 where p in [0,1], o in {0,1}."""
     o = 1.0 if actual_passed else 0.0
     return (predicted_yes_prob - o) ** 2
+
+
+def bootstrap_ci_yes_share(
+    post_votes: list[Vote],
+    n_boot: int = 1000,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> tuple[float, float]:
+    """Percentile bootstrap CI for the weighted predicted yes-share.
+
+    Resamples personas (with replacement) to estimate the sampling variance of
+    the predicted yes-share given this persona pool. Returns (low, high) on the
+    0..100 scale. Degenerate pools return a point interval.
+    """
+    if not post_votes:
+        return (50.0, 50.0)
+    if len(post_votes) == 1:
+        v = 100.0 * post_votes[0].stance
+        return (v, v)
+    rng = random.Random(seed)
+    n = len(post_votes)
+    stances = [v.stance for v in post_votes]
+    shares: list[float] = []
+    for _ in range(n_boot):
+        sample = [stances[rng.randrange(n)] for _ in range(n)]
+        shares.append(100.0 * sum(sample) / n)
+    shares.sort()
+    lo_idx = int((alpha / 2) * n_boot)
+    hi_idx = min(n_boot - 1, int((1 - alpha / 2) * n_boot))
+    return (shares[lo_idx], shares[hi_idx])
+
+
+def segment_breakdown(
+    personas: list,
+    pre_votes: list[Vote],
+    post_votes: list[Vote],
+    k_min: int = SEGMENT_MIN_N,
+) -> dict:
+    """Predicted per-demographic-segment breakdown from the deliberation.
+
+    Groups personas along a fixed set of axes and, for each cell, reports the
+    weighted predicted yes-share and mean |Δstance|. Cells with fewer than
+    k_min personas are suppressed (reported as suppressed, not with numbers) to
+    honor the k-anonymity promise in methodology §2/§5.
+
+    This is a *predicted* breakdown (methodology §5). Comparison against
+    certified per-segment returns is done separately, only when ground-truth
+    segment_results are populated for the measure.
+    """
+    def axis_value(p, axis: str) -> str:
+        if axis == "party_id":
+            return p.priors.party_id
+        return getattr(p.demographics, axis)
+
+    axes = ["party_id", "age_band", "education", "race_eth"]
+    post_by = {v.persona_id: v for v in post_votes}
+    out: dict = {}
+    for axis in axes:
+        cells: dict[str, list] = {}
+        for p in personas:
+            cells.setdefault(axis_value(p, axis), []).append(p)
+        axis_out: dict = {}
+        for value, members in sorted(cells.items()):
+            ids = {p.persona_id for p in members}
+            cell_post = [v for v in post_votes if v.persona_id in ids]
+            cell_pre = [v for v in pre_votes if v.persona_id in ids]
+            n = len(cell_post)
+            if n < k_min:
+                axis_out[value] = {"n": n, "suppressed": True}
+                continue
+            delta = opinion_change(cell_pre, cell_post)
+            axis_out[value] = {
+                "n": n,
+                "pred_yes_pct": predicted_yes_share_weighted(cell_post),
+                "mean_abs_delta": delta["mean_abs_delta"],
+            }
+        out[axis] = axis_out
+    return out
 
 
 def opinion_change(pre_votes: list[Vote], post_votes: list[Vote]) -> dict:
@@ -94,6 +177,12 @@ class SensitivityRow:
     def mean_brier(self) -> float:
         return sum(self.brier) / len(self.brier)
 
+    @property
+    def ci95_predicted(self) -> tuple[float, float]:
+        """Normal-approximation 95% CI of the predicted yes-share across seeds."""
+        half = 1.96 * self.stdev_predicted
+        return (self.mean_predicted - half, self.mean_predicted + half)
+
 
 def render_sensitivity_report(rows: list[SensitivityRow], n_personas: int) -> str:
     """Render an aggregate sensitivity report across measures and seeds."""
@@ -105,14 +194,15 @@ def render_sensitivity_report(rows: list[SensitivityRow], n_personas: int) -> st
         "",
         "## Aggregate across seeds",
         "",
-        "| Measure | Actual | Mean Predicted | Std Dev | Min | Max | Spread | Mean MAE | Mean Brier |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Measure | Actual | Mean Predicted | 95% CI | Std Dev | Min | Max | Spread | Mean MAE | Mean Brier |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in rows:
         spread = r.max_predicted - r.min_predicted
+        ci_lo, ci_hi = r.ci95_predicted
         lines.append(
             f"| {r.measure_id} | {r.actual_yes_pct:.1f}% "
-            f"| {r.mean_predicted:.1f}% | {r.stdev_predicted:.2f} "
+            f"| {r.mean_predicted:.1f}% | {ci_lo:.1f}–{ci_hi:.1f} | {r.stdev_predicted:.2f} "
             f"| {r.min_predicted:.1f}% | {r.max_predicted:.1f}% "
             f"| {spread:.1f} pts | {r.mean_mae:.2f} | {r.mean_brier:.4f} |"
         )
@@ -151,6 +241,9 @@ class MeasureReport:
     prompt_version: str
     persona_lib_versions: dict
     notes: list[str]
+    ci_low: float = 0.0
+    ci_high: float = 0.0
+    segments: dict = field(default_factory=dict)
 
     def render(self) -> str:
         lines = [
@@ -169,7 +262,8 @@ class MeasureReport:
             "## Prediction vs. ground truth",
             "",
             f"- Predicted yes (threshold rule): {self.predicted_yes_pct_threshold:.1f}%",
-            f"- Predicted yes (weighted): {self.predicted_yes_pct_weighted:.1f}%",
+            f"- Predicted yes (weighted): {self.predicted_yes_pct_weighted:.1f}% "
+            f"(95% CI {self.ci_low:.1f}–{self.ci_high:.1f}, bootstrap over personas)",
             f"- Actual yes: {self.actual_yes_pct:.1f}%",
             f"- MAE (threshold): {self.mae_threshold:.1f} pts",
             f"- MAE (weighted): {self.mae_weighted:.1f} pts",
@@ -181,9 +275,33 @@ class MeasureReport:
             f"- Flip rate: {self.opinion_change.get('flip_rate', 0):.3f}",
             f"- N matched: {self.opinion_change.get('n', 0)}",
             "",
-            "## Notes",
-            "",
         ]
+        lines += self._render_segments()
+        lines += ["## Notes", ""]
         for n in self.notes:
             lines.append(f"- {n}")
         return "\n".join(lines)
+
+    def _render_segments(self) -> list[str]:
+        if not self.segments:
+            return []
+        lines = [
+            "## Predicted per-segment breakdown",
+            "",
+            f"Cells with fewer than {SEGMENT_MIN_N} personas are suppressed "
+            "(k-anonymity). Predicted, not certified — see methodology §5.",
+            "",
+        ]
+        for axis, cells in self.segments.items():
+            lines += [f"### {axis}", "", "| Segment | N | Predicted yes | Mean |Δstance| |",
+                      "|---|---:|---:|---:|"]
+            for value, cell in cells.items():
+                if cell.get("suppressed"):
+                    lines.append(f"| {value} | {cell['n']} | suppressed (N<{SEGMENT_MIN_N}) | — |")
+                else:
+                    lines.append(
+                        f"| {value} | {cell['n']} | {cell['pred_yes_pct']:.1f}% "
+                        f"| {cell['mean_abs_delta']:.3f} |"
+                    )
+            lines.append("")
+        return lines

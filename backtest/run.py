@@ -16,12 +16,14 @@ from backtest.measure_loader import LoadedMeasure, load_measure
 from backtest.metrics import (
     MeasureReport,
     SensitivityRow,
+    bootstrap_ci_yes_share,
     brier_score,
     mean_absolute_error,
     opinion_change,
     predicted_yes_pct,
     predicted_yes_share_weighted,
     render_sensitivity_report,
+    segment_breakdown,
 )
 from forum.budget import DEFAULT_DELIBERATION_BUDGET_USD, CostMeter
 from forum.graph import run_deliberation
@@ -92,6 +94,8 @@ def run_one(
     mae_weighted = mean_absolute_error(pred_weighted, actual)
     brier = brier_score(pred_weighted / 100.0, measure.ground_truth.passed)
     delta = opinion_change(pre_votes, post_votes)
+    ci_low, ci_high = bootstrap_ci_yes_share(post_votes, seed=seed)
+    segments = segment_breakdown(personas, pre_votes, post_votes)
 
     notes: list[str] = []
     if stub:
@@ -119,6 +123,9 @@ def run_one(
         prompt_version=final.get("prompt_version", "stub"),
         persona_lib_versions=source_versions or {"acs": "stub", "anes": "stub"},
         notes=notes,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        segments=segments,
     )
 
     # Binding refusal layer (methodology §6), output side: the Output
