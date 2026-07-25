@@ -37,7 +37,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 from backtest.measure_loader import list_measures
-from backtest.run import run_all, run_one
+from backtest.run import run_all, run_one, run_sensitivity
 from forum.refusal import check_request
 from personas.db import connect, get_source_versions
 
@@ -107,6 +107,28 @@ def backtest(
         mids = [m if m.startswith("wa_") else f"wa_{m}" for m in measures]
     reports = run_all(measure_ids=mids, n_personas=n, seed=seed, stub=stub)
     console.print(f"[green]Wrote {len(reports)} reports.[/green]")
+
+
+@app.command()
+def sensitivity(
+    measures: list[str] = typer.Option(None, help="Restrict to specific measure ids"),
+    n: int = typer.Option(12),
+    seeds: str = typer.Option("1,2,3,4,5", help="Comma-separated seed list"),
+    stub: bool = typer.Option(False, help="Run without LLM calls"),
+) -> None:
+    """Run a sensitivity sweep: each measure x each seed, with aggregate stats."""
+    mids = None
+    if measures:
+        mids = [m if m.startswith("wa_") else f"wa_{m}" for m in measures]
+    seed_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
+    rows = run_sensitivity(measure_ids=mids, n_personas=n, seeds=seed_list, stub=stub)
+    for r in rows:
+        spread = r.max_predicted - r.min_predicted
+        console.print(
+            f"[green]{r.measure_id}[/green] | actual {r.actual_yes_pct:.1f}% "
+            f"| mean predicted {r.mean_predicted:.1f}% (sd {r.stdev_predicted:.2f}) "
+            f"| spread {spread:.1f} pts | mean MAE {r.mean_mae:.2f}"
+        )
 
 
 @app.command("list-measures")

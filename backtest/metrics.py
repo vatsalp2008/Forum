@@ -60,6 +60,79 @@ def opinion_change(pre_votes: list[Vote], post_votes: list[Vote]) -> dict:
 
 
 @dataclass
+class SensitivityRow:
+    measure_id: str
+    actual_yes_pct: float
+    seeds: list[int]
+    predicted_weighted: list[float]
+    mae_weighted: list[float]
+    brier: list[float]
+
+    @property
+    def mean_predicted(self) -> float:
+        return sum(self.predicted_weighted) / len(self.predicted_weighted)
+
+    @property
+    def stdev_predicted(self) -> float:
+        m = self.mean_predicted
+        var = sum((x - m) ** 2 for x in self.predicted_weighted) / max(1, len(self.predicted_weighted) - 1)
+        return var ** 0.5
+
+    @property
+    def min_predicted(self) -> float:
+        return min(self.predicted_weighted)
+
+    @property
+    def max_predicted(self) -> float:
+        return max(self.predicted_weighted)
+
+    @property
+    def mean_mae(self) -> float:
+        return sum(self.mae_weighted) / len(self.mae_weighted)
+
+    @property
+    def mean_brier(self) -> float:
+        return sum(self.brier) / len(self.brier)
+
+
+def render_sensitivity_report(rows: list[SensitivityRow], n_personas: int) -> str:
+    """Render an aggregate sensitivity report across measures and seeds."""
+    lines = [
+        "# Sensitivity report",
+        "",
+        f"N personas per run: {n_personas}",
+        f"Seeds per measure: {len(rows[0].seeds) if rows else 0}",
+        "",
+        "## Aggregate across seeds",
+        "",
+        "| Measure | Actual | Mean Predicted | Std Dev | Min | Max | Spread | Mean MAE | Mean Brier |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for r in rows:
+        spread = r.max_predicted - r.min_predicted
+        lines.append(
+            f"| {r.measure_id} | {r.actual_yes_pct:.1f}% "
+            f"| {r.mean_predicted:.1f}% | {r.stdev_predicted:.2f} "
+            f"| {r.min_predicted:.1f}% | {r.max_predicted:.1f}% "
+            f"| {spread:.1f} pts | {r.mean_mae:.2f} | {r.mean_brier:.4f} |"
+        )
+    lines += ["", "## Per-seed detail", "", "| Measure | Seed | Predicted | MAE | Brier |", "|---|---:|---:|---:|---:|"]
+    for r in rows:
+        for seed, pred, mae, brier in zip(r.seeds, r.predicted_weighted, r.mae_weighted, r.brier):
+            lines.append(f"| {r.measure_id} | {seed} | {pred:.1f}% | {mae:.2f} | {brier:.4f} |")
+    lines += [
+        "",
+        "## Interpretation guide",
+        "",
+        "- **Low std dev (<2 pts) AND low MAE (<3 pts)**: result is stable. Either real signal OR contamination — a contamination probe (planned) is needed to disambiguate.",
+        "- **Low std dev AND high MAE**: methodology is biased but reproducible. Investigate per-segment errors.",
+        "- **High std dev (>5 pts)**: result is noise-dominated. Increase N or rethink methodology.",
+        "- **Wide spread relative to MAE**: a single-seed report would be misleading. Always report variance.",
+    ]
+    return "\n".join(lines)
+
+
+@dataclass
 class MeasureReport:
     measure_id: str
     n_personas: int

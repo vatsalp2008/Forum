@@ -31,11 +31,19 @@ v0, in development. Solo-maintained. Free-tier-only stack.
 ```bash
 # Requires Python 3.11+
 uv sync                                 # install dependencies
-export GEMINI_API_KEY=...               # free tier is sufficient for v0
-forum personas build --state WA        # build persona library
+echo "GEMINI_API_KEY=..." > .env        # free tier (Gemma) is sufficient for v0
+forum personas build --state WA        # build persona library (needs ACS+ANES data)
 forum deliberate i1631                 # run a single deliberation
-forum backtest                          # run all measures, emit calibration report
+forum backtest                          # run all measures, emit per-measure reports
+forum sensitivity --n 12 --seeds 1,2,3,4,5
+                                        # run sensitivity sweep across seeds
+forum refusal-check "predict the next election"
+                                        # test the input-side refusal layer
 ```
+
+A single deliberation in stub mode (no API key needed) is the fastest way to
+verify everything works: `forum deliberate i1631 --stub`. The full pipeline
+runs end-to-end and produces a report with pseudo-random stances.
 
 ## Repository layout
 

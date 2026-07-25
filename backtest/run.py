@@ -15,11 +15,13 @@ from typing import Iterable
 from backtest.measure_loader import LoadedMeasure, load_measure
 from backtest.metrics import (
     MeasureReport,
+    SensitivityRow,
     brier_score,
     mean_absolute_error,
     opinion_change,
     predicted_yes_pct,
     predicted_yes_share_weighted,
+    render_sensitivity_report,
 )
 from forum.budget import DEFAULT_DELIBERATION_BUDGET_USD, CostMeter
 from forum.graph import run_deliberation
@@ -111,8 +113,11 @@ def run_one(
         notes=notes,
     )
 
-    (run_dir / f"{measure_id}.md").write_text(report.render())
-    (run_dir / f"{measure_id}.json").write_text(
+    # Include the seed in the filename so multiple seeds of the same measure
+    # (e.g. a sensitivity sweep sharing one run_id) do not clobber each other.
+    stem = f"{measure_id}-seed{seed}"
+    (run_dir / f"{stem}.md").write_text(report.render())
+    (run_dir / f"{stem}.json").write_text(
         json.dumps(_serialize_run(final, asdict(report)), default=str, indent=2)
     )
     return report
@@ -135,6 +140,42 @@ def run_all(
         )
     _write_summary(run_id, reports)
     return reports
+
+
+def run_sensitivity(
+    measure_ids: Iterable[str] | None = None,
+    n_personas: int = 12,
+    seeds: Iterable[int] = (1, 2, 3, 4, 5),
+    stub: bool = False,
+) -> list[SensitivityRow]:
+    """Run each (measure, seed) combination; emit per-run reports plus an
+    aggregate sensitivity report."""
+    from backtest.measure_loader import list_measures, load_measure
+    if measure_ids is None:
+        measure_ids = list_measures()
+    measure_ids = list(measure_ids)
+    seeds = list(seeds)
+    run_id = time.strftime("%Y%m%d-%H%M%S") + "-sens"
+
+    rows: list[SensitivityRow] = []
+    for mid in measure_ids:
+        preds: list[float] = []
+        maes: list[float] = []
+        briers: list[float] = []
+        for seed in seeds:
+            r = run_one(mid, n_personas=n_personas, seed=seed, stub=stub, run_id=run_id)
+            preds.append(r.predicted_yes_pct_weighted)
+            maes.append(r.mae_weighted)
+            briers.append(r.brier)
+        actual = load_measure(mid).ground_truth.yes_pct
+        rows.append(SensitivityRow(
+            measure_id=mid, actual_yes_pct=actual, seeds=seeds,
+            predicted_weighted=preds, mae_weighted=maes, brier=briers,
+        ))
+
+    run_dir = RUNS_DIR / run_id
+    (run_dir / "sensitivity.md").write_text(render_sensitivity_report(rows, n_personas))
+    return rows
 
 
 def _write_summary(run_id: str, reports: list[MeasureReport]) -> None:
