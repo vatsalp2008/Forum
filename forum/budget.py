@@ -14,10 +14,12 @@ PRICING = {
     # Approximate USD per 1M tokens. Gemma models are free on AI Studio's
     # free tier; we use small nominal numbers so the meter still tracks
     # relative usage. Verify against current Google pricing.
-    "gemma-3-1b-it":   {"input": 0.0, "output": 0.0},
-    "gemma-3-4b-it":   {"input": 0.0, "output": 0.0},
-    "gemma-3-12b-it":  {"input": 0.0, "output": 0.0},
-    "gemma-3-27b-it":  {"input": 0.0, "output": 0.0},
+    "gemma-3-1b-it":       {"input": 0.0, "output": 0.0},
+    "gemma-3-4b-it":       {"input": 0.0, "output": 0.0},
+    "gemma-3-12b-it":      {"input": 0.0, "output": 0.0},
+    "gemma-3-27b-it":      {"input": 0.0, "output": 0.0},
+    "gemma-4-26b-a4b-it":  {"input": 0.0, "output": 0.0},
+    "gemma-4-31b-it":      {"input": 0.0, "output": 0.0},
     "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
     "gemini-2.5-flash":      {"input": 0.30, "output": 2.50},
     "gemini-2.5-pro":        {"input": 1.25, "output": 10.00},

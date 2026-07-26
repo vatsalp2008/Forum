@@ -17,9 +17,12 @@ from typing import Any
 
 from forum.budget import CostMeter
 
-DEFAULT_CITIZEN_MODEL = "gemma-3-12b-it"
-DEFAULT_MODERATOR_MODEL = "gemma-3-27b-it"
-DEFAULT_CRITIC_MODEL = "gemma-3-12b-it"
+# Gemma-4 open-weight models, free on AI Studio's free tier. The older
+# gemma-3-*-it names were retired from the API; verify availability for your
+# key with `genai.list_models()` if a live run 404s on the model name.
+DEFAULT_CITIZEN_MODEL = "gemma-4-26b-a4b-it"
+DEFAULT_MODERATOR_MODEL = "gemma-4-31b-it"
+DEFAULT_CRITIC_MODEL = "gemma-4-26b-a4b-it"
 
 # Gemma models do not support the JSON-mode mime type that Gemini does.
 # We instead instruct via prompt and parse robustly (see strip_code_fences).
