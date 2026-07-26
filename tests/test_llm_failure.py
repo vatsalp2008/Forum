@@ -20,16 +20,19 @@ class _BoomModel:
 
 def _live_client_that_fails() -> LLMClient:
     meter = CostMeter(cap_usd=1.0)
-    llm = LLMClient(meter=meter, stub=False, api_key="fake-key")
+    # No throttling / minimal retries so the test is fast.
+    llm = LLMClient(meter=meter, stub=False, api_key="fake-key",
+                    min_interval_s=0.0, max_retries=2)
     # Replace the google-generativeai client with one that always errors.
     llm._client = type("_G", (), {"GenerativeModel": lambda self, m: _BoomModel()})()
     return llm
 
 
-def test_live_llm_failure_raises_not_fabricates():
+def test_live_llm_failure_raises_not_fabricates(monkeypatch):
+    monkeypatch.setattr("forum.llm.time.sleep", lambda *_: None)  # no real backoff wait
     llm = _live_client_that_fails()
     with pytest.raises(LLMError):
-        llm.generate(model="gemma-3-12b-it", system="s", user="u", json_mode=True)
+        llm.generate(model="gemini-2.5-flash-lite", system="s", user="u", json_mode=True)
 
 
 def test_stub_client_still_returns_canned_data():

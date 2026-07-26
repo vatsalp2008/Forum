@@ -11,18 +11,21 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from forum.budget import CostMeter
 
-# Gemma-4 open-weight models, free on AI Studio's free tier. The older
-# gemma-3-*-it names were retired from the API; verify availability for your
-# key with `genai.list_models()` if a live run 404s on the model name.
-DEFAULT_CITIZEN_MODEL = "gemma-4-26b-a4b-it"
-DEFAULT_MODERATOR_MODEL = "gemma-4-31b-it"
-DEFAULT_CRITIC_MODEL = "gemma-4-26b-a4b-it"
+# gemini-2.5-flash-lite: fast, free-tier-eligible, and supports native JSON
+# mode (see JSON_MODE_SUPPORTED_MODELS) which makes vote parsing reliable.
+# The retired gemma-3-*-it names and the flaky free-tier gemma-4-* models
+# were dropped as defaults; verify availability for your key with
+# `genai.list_models()` if a live run 404s on the model name.
+DEFAULT_CITIZEN_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODERATOR_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_CRITIC_MODEL = "gemini-2.5-flash-lite"
 
 # Gemma models do not support the JSON-mode mime type that Gemini does.
 # We instead instruct via prompt and parse robustly (see strip_code_fences).
@@ -72,17 +75,41 @@ def strip_code_fences(text: str) -> str:
     return s.strip()
 
 
+# Free-tier defaults. Requests-per-minute limits are low, so we space live
+# calls out and back off generously on 429/503/504. Override via env for
+# paid tiers: FORUM_LLM_MIN_INTERVAL_S, FORUM_LLM_MAX_RETRIES.
+DEFAULT_MIN_CALL_INTERVAL_S = 4.0
+DEFAULT_MAX_RETRIES = 5
+
+
+def _retry_delay_seconds(err: Exception) -> float | None:
+    """Extract a server-suggested retry delay (e.g. 'retry_delay { seconds: 2 }')."""
+    m = re.search(r"seconds:\s*(\d+)", str(err))
+    return float(m.group(1)) if m else None
+
+
 class LLMClient:
     def __init__(
         self,
         meter: CostMeter,
         stub: bool = False,
         api_key: str | None = None,
+        min_interval_s: float | None = None,
+        max_retries: int | None = None,
     ) -> None:
         self.meter = meter
         self.stub = stub
         self._api_key = api_key or os.environ.get("GEMINI_API_KEY")
         self._client: Any = None
+        self.min_interval_s = (
+            min_interval_s if min_interval_s is not None
+            else float(os.environ.get("FORUM_LLM_MIN_INTERVAL_S", DEFAULT_MIN_CALL_INTERVAL_S))
+        )
+        self.max_retries = (
+            max_retries if max_retries is not None
+            else int(os.environ.get("FORUM_LLM_MAX_RETRIES", DEFAULT_MAX_RETRIES))
+        )
+        self._last_call_ts: float = 0.0
         if not self.stub:
             self._init_client()
 
@@ -97,6 +124,15 @@ class LLMClient:
 
         genai.configure(api_key=self._api_key)
         self._client = genai
+
+    def _throttle(self) -> None:
+        """Space out live calls to stay under free-tier requests-per-minute."""
+        if self.min_interval_s <= 0:
+            return
+        wait = self.min_interval_s - (time.monotonic() - self._last_call_ts)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_call_ts = time.monotonic()
 
     def generate(
         self,
@@ -117,21 +153,26 @@ class LLMClient:
         if json_mode and model in JSON_MODE_SUPPORTED_MODELS:
             kwargs["response_mime_type"] = "application/json"
         last_err: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(self.max_retries):
+            self._throttle()
             try:
                 resp = m.generate_content(full_prompt, generation_config=kwargs)
                 last_err = None
                 break
             except Exception as e:
                 last_err = e
-                # brief backoff for transient rate-limit / 5xx
-                time.sleep(0.5 * (attempt + 1))
+                # Honor a server-suggested retry delay (rate limits carry one);
+                # otherwise exponential backoff. Free-tier RPM limits need
+                # seconds, not milliseconds.
+                suggested = _retry_delay_seconds(e)
+                backoff = suggested if suggested is not None else 2.0 * (2 ** attempt)
+                time.sleep(backoff)
         if last_err is not None:
             # Live mode (we return early above when self.stub). Quota /
             # rate-limit / network errors abort the run loudly rather than
             # silently fabricating data. Use stub=True for an offline run.
             raise LLMError(
-                f"LLM call to {model!r} failed after 3 attempts: "
+                f"LLM call to {model!r} failed after {self.max_retries} attempts: "
                 f"{type(last_err).__name__}: {last_err}"
             ) from last_err
         text = (resp.text or "").strip()
