@@ -17,12 +17,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from forum.llm import (
-    DEFAULT_CITIZEN_MODEL,
-    DEFAULT_CRITIC_MODEL,
-    DEFAULT_MODERATOR_MODEL,
-    LLMClient,
-)
+from forum.llm import LLMClient
 from forum.prompts import (
     CITIZEN_DELIBERATE_PROMPT,
     CITIZEN_SYSTEM_PROMPT,
@@ -49,7 +44,7 @@ def _vote_for_persona(
     if recent_statements_text:
         system += "\n\nRecent deliberation:\n" + recent_statements_text
     resp = llm.generate(
-        model=DEFAULT_CITIZEN_MODEL,
+        model=llm.citizen_model,
         system=system,
         user=VOTE_PROMPT.format(framing=measure.framing),
         json_mode=True,
@@ -103,7 +98,7 @@ def make_briefing_node(llm: LLMClient):
         statements = list(state.get("statements", []))
         seed = state.get("seed", 0)
         resp = llm.generate(
-            model=DEFAULT_MODERATOR_MODEL,
+            model=llm.moderator_model,
             system="You are an impartial deliberation moderator.",
             user=MODERATOR_BRIEFING_PROMPT.format(
                 title=measure.title,
@@ -154,7 +149,7 @@ def make_deliberate_node(llm: LLMClient):
                 recent_statements=recent_text,
             )
             resp = llm.generate(
-                model=DEFAULT_CITIZEN_MODEL,
+                model=llm.citizen_model,
                 system=CITIZEN_SYSTEM_PROMPT + "\n\n" + render_persona_backstory(speaker),
                 user=user_prompt,
                 temperature=0.7,
@@ -164,7 +159,7 @@ def make_deliberate_node(llm: LLMClient):
 
             # Critic fact-check (cheap; on each statement)
             critic = llm.generate(
-                model=DEFAULT_CRITIC_MODEL,
+                model=llm.critic_model,
                 system="You are a fact-checker. Be precise; do not flag normative disagreement.",
                 user=CRITIC_FACT_CHECK_PROMPT.format(
                     statement=text,
@@ -259,10 +254,7 @@ def run_deliberation(
         "finished": False,
         "seed": seed,
         "mode": "stub" if llm.stub else "live",
-        "model_version": (
-            "stub" if llm.stub
-            else f"{DEFAULT_CITIZEN_MODEL}+{DEFAULT_MODERATOR_MODEL}"
-        ),
+        "model_version": "stub" if llm.stub else llm.model_version,
         "prompt_version": PROMPT_VERSION,
     }
     final = graph.invoke(initial, config={"recursion_limit": 50})

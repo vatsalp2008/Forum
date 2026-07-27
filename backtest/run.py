@@ -28,7 +28,7 @@ from backtest.metrics import (
 )
 from forum.budget import DEFAULT_DELIBERATION_BUDGET_USD, CostMeter
 from forum.graph import run_deliberation
-from forum.llm import LLMClient
+from forum.llm import PROVIDER_GEMINI, make_llm_client
 from forum.refusal import RefusalError, check_output, check_request
 from forum.state import Vote
 from personas.db import connect, get_source_versions
@@ -45,6 +45,7 @@ def run_one(
     stub: bool = False,
     budget_usd: float = DEFAULT_DELIBERATION_BUDGET_USD,
     run_id: str | None = None,
+    provider: str = PROVIDER_GEMINI,
 ) -> MeasureReport:
     run_id = run_id or time.strftime("%Y%m%d-%H%M%S") + ("-stub" if stub else "")
     run_dir = RUNS_DIR / run_id
@@ -81,7 +82,7 @@ def run_one(
         personas = sample_personas(con, spec)
 
     meter = CostMeter(cap_usd=budget_usd)
-    llm = LLMClient(meter=meter, stub=stub)
+    llm = make_llm_client(provider, meter=meter, stub=stub)
 
     final = run_deliberation(llm, measure.spec, personas, seed=seed)
 
@@ -155,6 +156,7 @@ def run_multigroup(
     stub: bool = False,
     budget_usd: float = DEFAULT_DELIBERATION_BUDGET_USD,
     run_id: str | None = None,
+    provider: str = PROVIDER_GEMINI,
 ) -> MultiGroupReport:
     """Run N independent deliberating groups on one measure and aggregate.
 
@@ -180,7 +182,7 @@ def run_multigroup(
         )
 
     meter = CostMeter(cap_usd=budget_usd)
-    llm = LLMClient(meter=meter, stub=stub)
+    llm = make_llm_client(provider, meter=meter, stub=stub)
 
     all_pre: list[Vote] = []
     all_post: list[Vote] = []
@@ -252,6 +254,7 @@ def run_all(
     n_personas: int = 12,
     seed: int = 42,
     stub: bool = False,
+    provider: str = PROVIDER_GEMINI,
 ) -> list[MeasureReport]:
     from backtest.measure_loader import list_measures
     if measure_ids is None:
@@ -260,7 +263,8 @@ def run_all(
     reports = []
     for mid in measure_ids:
         reports.append(
-            run_one(mid, n_personas=n_personas, seed=seed, stub=stub, run_id=run_id)
+            run_one(mid, n_personas=n_personas, seed=seed, stub=stub,
+                    run_id=run_id, provider=provider)
         )
     _write_summary(run_id, reports)
     return reports

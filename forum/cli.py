@@ -92,11 +92,13 @@ def deliberate(
     seed: int = typer.Option(42),
     stub: bool = typer.Option(False, help="Run without LLM calls (canned outputs)"),
     budget: float = typer.Option(5.0, help="USD budget cap for this run"),
+    provider: str = typer.Option("gemini", help="Model family: gemini | anthropic"),
 ) -> None:
     """Run a single deliberation on a measure."""
     measure_id = measure_id if measure_id.startswith("wa_") else f"wa_{measure_id}"
     try:
-        report = run_one(measure_id, n_personas=n, seed=seed, stub=stub, budget_usd=budget)
+        report = run_one(measure_id, n_personas=n, seed=seed, stub=stub,
+                         budget_usd=budget, provider=provider)
     except RefusalError as e:
         console.print(f"[red]REFUSED:[/red] {e}")
         raise typer.Exit(code=2)
@@ -109,13 +111,14 @@ def backtest(
     n: int = typer.Option(12),
     seed: int = typer.Option(42),
     stub: bool = typer.Option(False, help="Run without LLM calls"),
+    provider: str = typer.Option("gemini", help="Model family: gemini | anthropic"),
 ) -> None:
     """Run backtest on all (or some) resolved measures."""
     mids = None
     if measures:
         mids = [m if m.startswith("wa_") else f"wa_{m}" for m in measures]
     try:
-        reports = run_all(measure_ids=mids, n_personas=n, seed=seed, stub=stub)
+        reports = run_all(measure_ids=mids, n_personas=n, seed=seed, stub=stub, provider=provider)
     except RefusalError as e:
         console.print(f"[red]REFUSED:[/red] {e}")
         raise typer.Exit(code=2)
