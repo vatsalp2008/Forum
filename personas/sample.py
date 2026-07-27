@@ -57,23 +57,40 @@ def _draw_party_id(
     return str(rng.choice(["dem", "ind", "rep"], p=[p_dem, p_ind, p_rep]))
 
 
+# Issue-prior sources, blended at sample time. Add new survey tables here;
+# each must share anes_priors' schema (see personas/db.py).
+PRIOR_SOURCE_TABLES = ("anes_priors", "cces_priors")
+
+
 def _lookup_priors(
     con: duckdb.DuckDBPyConnection,
     party_id: str,
     education: str,
     age_band: str,
 ) -> IssuePriors:
-    row = con.execute(
-        """
-        SELECT p_climate_action_support, p_gun_restriction_support,
-               p_tax_on_rich_support, ideology_score, cell_n
-        FROM anes_priors
-        WHERE party_id = ? AND education = ? AND age_band = ?
-        """,
-        [party_id, education, age_band],
-    ).fetchone()
-    if row is None or row[4] < K_ANONYMITY_MIN:
-        # graceful degradation: marginal-only priors. Log this somewhere in v1.
+    """Blend issue priors across all sources for this cell (cell-N weighted).
+
+    Each source contributes its (climate, gun, tax, ideology) values weighted
+    by its cell sample size, so larger surveys pull the estimate proportionally.
+    Sources whose cell is missing or below k-anonymity are skipped. If no source
+    has a valid cell, degrade to marginal 0.5 priors.
+    """
+    contributions: list[tuple[tuple[float, float, float, float], int]] = []
+    for table in PRIOR_SOURCE_TABLES:
+        row = con.execute(
+            f"""
+            SELECT p_climate_action_support, p_gun_restriction_support,
+                   p_tax_on_rich_support, ideology_score, cell_n
+            FROM {table}
+            WHERE party_id = ? AND education = ? AND age_band = ?
+            """,
+            [party_id, education, age_band],
+        ).fetchone()
+        if row is not None and row[4] >= K_ANONYMITY_MIN:
+            contributions.append((row[:4], int(row[4])))
+
+    if not contributions:
+        # graceful degradation: marginal-only priors.
         return IssuePriors(
             party_id=party_id,  # type: ignore[arg-type]
             p_climate_action_support=0.5,
@@ -81,12 +98,18 @@ def _lookup_priors(
             p_tax_on_rich_support=0.5,
             ideology_score=0.0,
         )
+
+    total_n = sum(n for _, n in contributions)
+    blended = [
+        sum(vals[i] * n for vals, n in contributions) / total_n
+        for i in range(4)
+    ]
     return IssuePriors(
         party_id=party_id,  # type: ignore[arg-type]
-        p_climate_action_support=row[0],
-        p_gun_restriction_support=row[1],
-        p_tax_on_rich_support=row[2],
-        ideology_score=row[3],
+        p_climate_action_support=blended[0],
+        p_gun_restriction_support=blended[1],
+        p_tax_on_rich_support=blended[2],
+        ideology_score=blended[3],
     )
 
 
