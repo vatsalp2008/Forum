@@ -35,6 +35,20 @@ CREATE TABLE IF NOT EXISTS anes_priors (
     PRIMARY KEY (party_id, education, age_band)
 );
 
+CREATE TABLE IF NOT EXISTS cces_priors (
+    -- Same schema/keys as anes_priors; a second issue-prior source (CES/CCES)
+    -- that is blended with anes_priors at sample time (cell-N weighted).
+    party_id        VARCHAR NOT NULL,
+    education       VARCHAR NOT NULL,
+    age_band        VARCHAR NOT NULL,
+    p_climate_action_support  DOUBLE NOT NULL,
+    p_gun_restriction_support DOUBLE NOT NULL,
+    p_tax_on_rich_support     DOUBLE NOT NULL,
+    ideology_score            DOUBLE NOT NULL,
+    cell_n                    INTEGER NOT NULL,
+    PRIMARY KEY (party_id, education, age_band)
+);
+
 CREATE TABLE IF NOT EXISTS party_id_distribution (
     -- conditional distribution P(party_id | demographic skeleton)
     age_band        VARCHAR NOT NULL,
