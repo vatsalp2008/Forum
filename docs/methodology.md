@@ -55,7 +55,7 @@ For a given policy question:
 3. **No social pressure**: real DP participants update beliefs partly under interpersonal social pressure. LLM agents do not experience this directly.
 4. **Briefing balance is model-dependent**: what counts as a "balanced" briefing depends on the moderator agent's behavior. We document the briefing source set per measure and report any flagged imbalances.
 5. **Persuasion-graph attribution is self-reported, not causal**: FORUM does not yet implement counterfactual measurement of statement-level persuasion. Reported "influence" is the agent's self-attribution of belief change, which is rationalization-prone.
-6. **Single model family**: v0 uses Gemini only. Cross-model robustness audit is v2.
+6. **Single model family**: v0 uses Gemini only. The harness now also supports the Anthropic/Claude family (`--provider anthropic`), so a run's model family is recorded in every report's model version (e.g. `anthropic:claude-opus-5`) and results can be compared across families. The full cross-model robustness audit — running the backtest set on both families and reporting the divergence — is v2 and requires a billed key on each provider.
 
 ## 6. Refusal of service — outputs that FORUM never produces
 

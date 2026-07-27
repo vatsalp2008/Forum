@@ -48,11 +48,24 @@ runs end-to-end and produces a report with pseudo-random stances. Every report
 is stamped `Mode: STUB` or `Mode: LIVE` so stub output is never mistaken for a
 real result.
 
-**Live runs and quota.** Live mode calls the Gemini API and fails loudly on
+**Live runs and quota.** Live mode calls the model API and fails loudly on
 errors rather than fabricating data — set `stub=True` for offline runs. Google's
 free tier caps requests per day (as low as ~20/day for some models), which is
 below a single full deliberation; a real backtest sweep needs a billed key.
 Tune pacing with `FORUM_LLM_MIN_INTERVAL_S` and `FORUM_LLM_MAX_RETRIES`.
+
+**Cross-model robustness (v2).** Runs can use a second model family for the
+cross-model audit in [docs/methodology.md](docs/methodology.md) §5.6:
+
+```bash
+echo "ANTHROPIC_API_KEY=..." >> .env
+forum deliberate i1631 --provider anthropic   # default claude-opus-5
+FORUM_ANTHROPIC_MODEL=claude-haiku-4-5 forum deliberate i1631 --provider anthropic
+```
+
+The Anthropic path meters real token usage, so the `--budget` cap actually
+binds (unlike the free Gemma tier). A Claude API key needs credit balance —
+the free "Evaluation access" plan has none.
 
 ## Repository layout
 
