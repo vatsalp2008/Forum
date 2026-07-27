@@ -169,6 +169,31 @@ def multigroup(
     console.print(report.render())
 
 
+@app.command("persuasion-graph")
+def persuasion_graph(
+    measure_id: str = typer.Argument(..., help="Measure id, e.g. wa_i1631 or i1631"),
+    n: int = typer.Option(12, help="Number of personas"),
+    seed: int = typer.Option(42),
+    stub: bool = typer.Option(False, help="Run without LLM calls"),
+    provider: str = typer.Option("gemini", help="Model family: gemini | anthropic"),
+) -> None:
+    """Counterfactual leave-one-speaker-out influence on the final vote (§5.5)."""
+    from backtest.persuasion import run_persuasion_graph
+
+    measure_id = measure_id if measure_id.startswith("wa_") else f"wa_{measure_id}"
+    try:
+        rows = run_persuasion_graph(measure_id, n_personas=n, seed=seed,
+                                    stub=stub, provider=provider)
+    except RefusalError as e:
+        console.print(f"[red]REFUSED:[/red] {e}")
+        raise typer.Exit(code=2)
+    for r in rows:
+        console.print(
+            f"[green]{r.speaker_id}[/green] | {r.n_statements} stmts "
+            f"| |shift| {r.mean_abs_shift:.3f} | signed {r.mean_signed_shift:+.3f}"
+        )
+
+
 @app.command("contamination-probe")
 def contamination_probe(
     measures: list[str] = typer.Option(None, help="Restrict to specific measure ids"),
