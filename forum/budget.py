@@ -25,6 +25,11 @@ PRICING = {
     "gemini-2.5-pro":        {"input": 1.25, "output": 10.00},
     "gemini-2.0-flash":      {"input": 0.10, "output": 0.40},
     "gemini-2.0-flash-lite": {"input": 0.075, "output": 0.30},
+    # Anthropic / Claude (USD per 1M tokens). Verify against current pricing.
+    "claude-opus-5":         {"input": 5.00, "output": 25.00},
+    "claude-opus-4-8":       {"input": 5.00, "output": 25.00},
+    "claude-sonnet-5":       {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5":      {"input": 1.00, "output": 5.00},
 }
 
 DEFAULT_DELIBERATION_BUDGET_USD = 5.0
