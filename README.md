@@ -31,19 +31,28 @@ v0, in development. Solo-maintained. Free-tier-only stack.
 ```bash
 # Requires Python 3.11+
 uv sync                                 # install dependencies
-echo "GEMINI_API_KEY=..." > .env        # free tier (Gemma) is sufficient for v0
+echo "GEMINI_API_KEY=..." > .env        # default model: gemini-2.5-flash-lite
 forum personas build --state WA        # build persona library (needs ACS+ANES data)
 forum deliberate i1631                 # run a single deliberation
 forum backtest                          # run all measures, emit per-measure reports
 forum sensitivity --n 12 --seeds 1,2,3,4,5
-                                        # run sensitivity sweep across seeds
+                                        # sensitivity sweep across seeds (with CIs)
+forum contamination-probe              # measure LLM prior-knowledge leakage
 forum refusal-check "predict the next election"
                                         # test the input-side refusal layer
 ```
 
 A single deliberation in stub mode (no API key needed) is the fastest way to
 verify everything works: `forum deliberate i1631 --stub`. The full pipeline
-runs end-to-end and produces a report with pseudo-random stances.
+runs end-to-end and produces a report with pseudo-random stances. Every report
+is stamped `Mode: STUB` or `Mode: LIVE` so stub output is never mistaken for a
+real result.
+
+**Live runs and quota.** Live mode calls the Gemini API and fails loudly on
+errors rather than fabricating data — set `stub=True` for offline runs. Google's
+free tier caps requests per day (as low as ~20/day for some models), which is
+below a single full deliberation; a real backtest sweep needs a billed key.
+Tune pacing with `FORUM_LLM_MIN_INTERVAL_S` and `FORUM_LLM_MAX_RETRIES`.
 
 ## Repository layout
 

@@ -93,16 +93,6 @@ Output only the briefing text. No preamble.
 """
 
 
-MODERATOR_SPEAKER_SELECTION_PROMPT = """\
-You are the moderator. Round {round_num} of {total_rounds}.
-
-Participants who have spoken less than the average speaking count are eligible. From the eligible list, pick the next speaker to encourage diversity of perspective. Output only the persona_id of the chosen speaker. Output nothing else.
-
-Eligible participants (persona_id, demographics summary, statements_so_far):
-{eligible_list}
-"""
-
-
 CITIZEN_DELIBERATE_PROMPT = """\
 Round {round_num} of {total_rounds}. Recent statements (most recent last):
 
