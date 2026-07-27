@@ -1,0 +1,53 @@
+measure_id: wa_i1433
+title: "Washington Initiative 1433 — Minimum Wage Increase and Paid Sick Leave"
+year: 2016
+state: WA
+topic: labor
+
+# Public election results (Washington Secretary of State certified).
+# Source: results.vote.wa.gov 2016 General (1,848,583 yes / 1,370,907 no).
+ground_truth:
+  yes_pct: 57.4
+  no_pct: 42.6
+  passed: true
+
+# Demographic crosstabs from public exit polls / certified results, where available.
+# Stubbed; populate from sos.wa.gov county results + demographic estimates.
+segment_results: {}
+
+# Framing presented to FORUM agents. MUST NOT name the year of the vote
+# nor reveal the outcome (see docs/methodology.md §4).
+framing: >-
+  Washington State is considering a policy that would raise the statewide
+  minimum wage in steps over four years to $13.50 per hour, and would require
+  most employers to provide paid sick leave that workers accrue based on hours
+  worked. Should the policy be enacted?
+
+briefing: >-
+  The proposal raises the minimum wage from its current level in annual steps
+  to $13.50 per hour, after which it is adjusted for inflation. It also
+  requires employers to provide at least one hour of paid sick leave for every
+  40 hours worked, usable for the worker's own illness or to care for a family
+  member. Local governments may set higher standards. Supporters argue it
+  lifts pay for low-wage workers, lets sick employees stay home without losing
+  income, and boosts local spending; opponents argue it raises labor costs for
+  small businesses, may reduce hours or entry-level hiring, and imposes uniform
+  rules on regions with very different costs of living.
+
+briefing_sources:
+  - "Washington State Voters' Pamphlet, Initiative Measure No. 1433 (full text and explanatory statement)"
+  - "Washington Office of Financial Management, I-1433 fiscal impact statement"
+  - "Washington State Labor Council statement in support"
+  - "Association of Washington Business / National Federation of Independent Business opposition statements"
+
+pro_arguments:
+  - "A higher minimum wage raises incomes for low-wage workers and keeps pace with living costs."
+  - "Paid sick leave lets workers stay home when ill without losing pay, protecting public health."
+  - "Higher wages increase consumer spending that supports local economies."
+
+con_arguments:
+  - "Higher labor costs may lead small businesses to cut hours or reduce entry-level hiring."
+  - "A single statewide wage ignores large differences in cost of living between regions."
+  - "Paid-sick-leave mandates add administrative burden and cost for small employers."
+
+n_rounds: 5

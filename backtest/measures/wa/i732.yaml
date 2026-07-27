@@ -1,0 +1,58 @@
+measure_id: wa_i732
+title: "Washington Initiative 732 — Revenue-Neutral Carbon Tax"
+year: 2016
+state: WA
+topic: climate
+
+# Public election results (Washington Secretary of State certified).
+# Source: WA SoS certified results; en.wikipedia.org/wiki/2016_Washington_Initiative_732
+# (1,265,123 yes / 1,839,414 no).
+ground_truth:
+  yes_pct: 40.8
+  no_pct: 59.2
+  passed: false
+
+# Demographic crosstabs from public exit polls / certified results, where available.
+# Stubbed; populate from sos.wa.gov county results + demographic estimates.
+segment_results: {}
+
+# Framing presented to FORUM agents. MUST NOT name the year of the vote
+# nor reveal the outcome (see docs/methodology.md §4).
+framing: >-
+  Washington State is considering a policy that would impose a tax on carbon
+  emissions from fossil fuels, and would use the revenue to reduce the state
+  sales tax, fund a tax rebate for lower-income working households, and lower
+  a business tax on manufacturers — intended to be roughly revenue-neutral
+  overall. Should the policy be enacted?
+
+briefing: >-
+  The proposal sets a tax on carbon emissions beginning at $15 per metric ton
+  and rising over time. Unlike a policy that dedicates carbon revenue to
+  clean-energy spending, this measure is designed to be approximately
+  revenue-neutral: it lowers the state sales tax by one percentage point,
+  funds a rebate of up to $1,500 for low-income working families, and
+  effectively eliminates a business-and-occupation tax on manufacturing. The
+  tax would raise the price of gasoline and fossil-fuel-based electricity.
+  Supporters argue it prices carbon while cutting a regressive sales tax and
+  is a market-based bipartisan approach; opponents — including some
+  environmental groups — argue it spends nothing on clean energy, that
+  official estimates question whether it is truly revenue-neutral, and that
+  it raises energy costs.
+
+briefing_sources:
+  - "Washington State Voters' Pamphlet, Initiative Measure No. 732 (full text and explanatory statement)"
+  - "Washington Office of Financial Management, I-732 fiscal impact statement"
+  - "Carbon Washington (CarbonWA) statement in support"
+  - "Association of Washington Business opposition statement"
+
+pro_arguments:
+  - "A carbon price paired with a sales-tax cut reduces emissions while easing a regressive tax."
+  - "A revenue-neutral, market-based design is intended to attract support across the political spectrum."
+  - "A low-income rebate offsets energy-cost increases for working families."
+
+con_arguments:
+  - "The measure dedicates no revenue to clean-energy investment or affected communities."
+  - "State budget analysts questioned whether the design is genuinely revenue-neutral, risking a shortfall."
+  - "The tax raises gasoline and electricity prices for households and businesses."
+
+n_rounds: 5
