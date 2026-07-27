@@ -51,6 +51,7 @@ console = Console()
 @personas_app.command("build")
 def personas_build(
     state: str = typer.Option("WA", help="Two-letter state code"),
+    national: bool = typer.Option(False, help="Load all 50 states + DC from psam_pus[a-d].csv"),
     skip_acs: bool = typer.Option(False, help="Skip ACS load (priors only)"),
     skip_anes: bool = typer.Option(False, help="Skip ANES load (skeleton only)"),
     cces: bool = typer.Option(False, help="Also load CCES 2018 priors (blended with ANES)"),
@@ -58,9 +59,14 @@ def personas_build(
     """Load ACS PUMS and ANES (optionally CCES) into the persona library."""
     con = connect()
     if not skip_acs:
-        from personas.acs_loader import load_state
-        n = load_state(con, state=state)
-        console.print(f"[green]ACS:[/green] loaded {n} cells for {state}")
+        if national:
+            from personas.acs_loader import load_national
+            n = load_national(con)
+            console.print(f"[green]ACS:[/green] loaded {n} cells nationally (50 states + DC)")
+        else:
+            from personas.acs_loader import load_state
+            n = load_state(con, state=state)
+            console.print(f"[green]ACS:[/green] loaded {n} cells for {state}")
     if not skip_anes:
         from personas.anes_loader import load_anes
         np_, pp = load_anes(con)
