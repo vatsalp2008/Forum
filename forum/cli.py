@@ -53,8 +53,9 @@ def personas_build(
     state: str = typer.Option("WA", help="Two-letter state code"),
     skip_acs: bool = typer.Option(False, help="Skip ACS load (priors only)"),
     skip_anes: bool = typer.Option(False, help="Skip ANES load (skeleton only)"),
+    cces: bool = typer.Option(False, help="Also load CCES 2018 priors (blended with ANES)"),
 ) -> None:
-    """Load ACS PUMS and ANES into the persona library."""
+    """Load ACS PUMS and ANES (optionally CCES) into the persona library."""
     con = connect()
     if not skip_acs:
         from personas.acs_loader import load_state
@@ -64,6 +65,10 @@ def personas_build(
         from personas.anes_loader import load_anes
         np_, pp = load_anes(con)
         console.print(f"[green]ANES:[/green] loaded {np_} prior cells, {pp} party-id cells")
+    if cces:
+        from personas.cces_loader import load_cces
+        nc = load_cces(con)
+        console.print(f"[green]CCES:[/green] loaded {nc} prior cells (blended with ANES)")
 
 
 @personas_app.command("info")
