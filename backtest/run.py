@@ -15,6 +15,7 @@ from typing import Iterable
 from backtest.measure_loader import LoadedMeasure, load_measure
 from backtest.metrics import (
     MeasureReport,
+    MultiGroupReport,
     SensitivityRow,
     bootstrap_ci_yes_share,
     brier_score,
@@ -143,6 +144,106 @@ def run_one(
     (run_dir / f"{stem}.json").write_text(
         json.dumps(_serialize_run(final, asdict(report)), default=str, indent=2)
     )
+    return report
+
+
+def run_multigroup(
+    measure_id: str,
+    n_groups: int = 5,
+    group_size: int = 12,
+    seed: int = 42,
+    stub: bool = False,
+    budget_usd: float = DEFAULT_DELIBERATION_BUDGET_USD,
+    run_id: str | None = None,
+) -> MultiGroupReport:
+    """Run N independent deliberating groups on one measure and aggregate.
+
+    Each group is an independent persona draw (base seed + group index) that
+    deliberates separately; results are pooled for the point estimate and CI,
+    and the spread of per-group predictions gives a between-group variance.
+    """
+    run_id = run_id or time.strftime("%Y%m%d-%H%M%S") + "-mg" + ("-stub" if stub else "")
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    measure: LoadedMeasure = load_measure(measure_id)
+    req = check_request(measure.spec.framing)   # input-side refusal, before cost
+    if req.refused:
+        raise RefusalError(req)
+
+    con = connect()
+    source_versions = get_source_versions(con)
+    if not source_versions and not stub:
+        raise RuntimeError(
+            "Persona library has no loaded sources. "
+            "Run `forum personas build --state WA` first, or use --stub."
+        )
+
+    meter = CostMeter(cap_usd=budget_usd)
+    llm = LLMClient(meter=meter, stub=stub)
+
+    all_pre: list[Vote] = []
+    all_post: list[Vote] = []
+    all_personas: list = []
+    group_predicted: list[float] = []
+    final_state: dict = {}
+    for g in range(n_groups):
+        gseed = seed + g
+        if stub and not source_versions:
+            personas = _stub_personas(group_size, state=measure.state, seed=gseed)
+        else:
+            spec = PopulationSpec(
+                name=f"{measure.state}-adult-citizens",
+                state=measure.state,
+                n=group_size,
+                seed=gseed,
+                source_versions=source_versions,
+            )
+            personas = sample_personas(con, spec)
+        final_state = run_deliberation(llm, measure.spec, personas, seed=gseed)
+        pre = [v for v in final_state["votes"] if v.round == 0]
+        post = [v for v in final_state["votes"] if v.round == measure.spec.n_rounds + 1]
+        group_predicted.append(predicted_yes_share_weighted(post))
+        all_pre += pre
+        all_post += post
+        all_personas += personas
+
+    pooled_pred = predicted_yes_share_weighted(all_post)
+    pooled_ci = bootstrap_ci_yes_share(all_post, seed=seed)
+    delta = opinion_change(all_pre, all_post)
+    segments = segment_breakdown(all_personas, all_pre, all_post)
+
+    notes: list[str] = []
+    if stub:
+        notes.append("STUB MODE: no LLM calls; predictions are pseudo-random. Not a real result.")
+    if not source_versions:
+        notes.append("Persona library not loaded; personas were fabricated for pipeline test.")
+
+    report = MultiGroupReport(
+        measure_id=measure.spec.measure_id,
+        mode=final_state.get("mode", "stub" if stub else "live"),
+        n_groups=n_groups,
+        group_size=group_size,
+        seed=seed,
+        actual_yes_pct=measure.ground_truth.yes_pct,
+        n_rounds=measure.spec.n_rounds,
+        group_predicted=group_predicted,
+        pooled_predicted=pooled_pred,
+        pooled_ci=pooled_ci,
+        cost_usd=meter.spent_usd,
+        model_version=final_state.get("model_version", "stub"),
+        prompt_version=final_state.get("prompt_version", "stub"),
+        persona_lib_versions=source_versions or {"acs": "stub", "anes": "stub"},
+        opinion_change=delta,
+        segments=segments,
+        notes=notes,
+    )
+
+    report_text = report.render()
+    out = check_output(report_text)             # output-side refusal, before write
+    if out.refused:
+        raise RefusalError(out)
+    (run_dir / f"{measure_id}-multigroup-seed{seed}.md").write_text(report_text)
     return report
 
 
@@ -295,7 +396,9 @@ def _stub_personas(n: int, state: str, seed: int) -> list:
         )
         out.append(
             Persona(
-                persona_id=f"stub-{i:04d}",
+                # Seed-scoped id so pooling multiple stub groups (multigroup)
+                # does not collide persona_ids across groups.
+                persona_id=f"stub-{seed}-{i:04d}",
                 demographics=skel,
                 priors=priors,
                 sampling_seed=seed,

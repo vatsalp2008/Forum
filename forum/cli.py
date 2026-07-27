@@ -37,7 +37,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 from backtest.measure_loader import list_measures
-from backtest.run import run_all, run_one, run_sensitivity
+from backtest.run import run_all, run_multigroup, run_one, run_sensitivity
 from forum.refusal import RefusalError, check_request
 from personas.db import connect, get_source_versions
 
@@ -137,6 +137,28 @@ def sensitivity(
             f"| mean predicted {r.mean_predicted:.1f}% (sd {r.stdev_predicted:.2f}) "
             f"| spread {spread:.1f} pts | mean MAE {r.mean_mae:.2f}"
         )
+
+
+@app.command()
+def multigroup(
+    measure_id: str = typer.Argument(..., help="Measure id, e.g. wa_i1631 or i1631"),
+    groups: int = typer.Option(5, help="Number of independent deliberating groups"),
+    size: int = typer.Option(12, help="Personas per group"),
+    seed: int = typer.Option(42, help="Base seed (group g uses seed+g)"),
+    stub: bool = typer.Option(False, help="Run without LLM calls"),
+    budget: float = typer.Option(15.0, help="USD budget cap for this run"),
+) -> None:
+    """Run several independent groups on a measure and aggregate them."""
+    measure_id = measure_id if measure_id.startswith("wa_") else f"wa_{measure_id}"
+    try:
+        report = run_multigroup(
+            measure_id, n_groups=groups, group_size=size, seed=seed,
+            stub=stub, budget_usd=budget,
+        )
+    except RefusalError as e:
+        console.print(f"[red]REFUSED:[/red] {e}")
+        raise typer.Exit(code=2)
+    console.print(report.render())
 
 
 @app.command("contamination-probe")

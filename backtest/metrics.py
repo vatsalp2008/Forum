@@ -305,3 +305,98 @@ class MeasureReport:
                     )
             lines.append("")
         return lines
+
+
+@dataclass
+class MultiGroupReport:
+    """Aggregate of several independent deliberating groups on one measure.
+
+    A single group of ~12 is noisy; running G independent groups and pooling
+    them stabilizes the point estimate and yields a between-group variance —
+    a second, complementary uncertainty measure alongside the within-group
+    bootstrap CI (methodology §5, "sensitivity range across persona seeds").
+    """
+
+    measure_id: str
+    mode: str
+    n_groups: int
+    group_size: int
+    seed: int
+    actual_yes_pct: float
+    n_rounds: int
+    group_predicted: list[float]     # per-group weighted predicted yes-share
+    pooled_predicted: float          # pooled over all personas
+    pooled_ci: tuple[float, float]   # bootstrap CI over pooled personas
+    cost_usd: float
+    model_version: str
+    prompt_version: str
+    persona_lib_versions: dict
+    opinion_change: dict
+    segments: dict = field(default_factory=dict)
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def between_group_mean(self) -> float:
+        return sum(self.group_predicted) / len(self.group_predicted)
+
+    @property
+    def between_group_stdev(self) -> float:
+        m = self.between_group_mean
+        n = len(self.group_predicted)
+        var = sum((x - m) ** 2 for x in self.group_predicted) / max(1, n - 1)
+        return var ** 0.5
+
+    @property
+    def between_group_ci95(self) -> tuple[float, float]:
+        half = 1.96 * self.between_group_stdev
+        return (self.between_group_mean - half, self.between_group_mean + half)
+
+    @property
+    def mae_weighted(self) -> float:
+        return abs(self.pooled_predicted - self.actual_yes_pct)
+
+    def render(self) -> str:
+        bg_lo, bg_hi = self.between_group_ci95
+        lines = [
+            f"# Multi-group backtest report: {self.measure_id}",
+            "",
+            f"- Mode: {self.mode.upper()}"
+            + ("  ⚠️  STUB — pseudo-random, not a real result" if self.mode == "stub" else ""),
+            f"- Groups: {self.n_groups} × {self.group_size} personas",
+            f"- Rounds: {self.n_rounds}",
+            f"- Seed (base): {self.seed}",
+            f"- Models: {self.model_version}",
+            f"- Prompt version: {self.prompt_version}",
+            f"- Persona library versions: {self.persona_lib_versions}",
+            f"- Cost: ${self.cost_usd:.4f}",
+            "",
+            "## Prediction vs. ground truth",
+            "",
+            f"- Pooled predicted yes (weighted): {self.pooled_predicted:.1f}% "
+            f"(95% CI {self.pooled_ci[0]:.1f}–{self.pooled_ci[1]:.1f}, bootstrap over personas)",
+            f"- Between-group mean: {self.between_group_mean:.1f}% "
+            f"(95% CI {bg_lo:.1f}–{bg_hi:.1f}, σ={self.between_group_stdev:.2f} across {self.n_groups} groups)",
+            f"- Actual yes: {self.actual_yes_pct:.1f}%",
+            f"- MAE (pooled weighted): {self.mae_weighted:.1f} pts",
+            "",
+            "## Per-group predictions",
+            "",
+            "| Group | Predicted yes |",
+            "|---:|---:|",
+        ]
+        for i, p in enumerate(self.group_predicted):
+            lines.append(f"| {i} | {p:.1f}% |")
+        lines += [
+            "",
+            "## Opinion change (pooled, pre vs. post)",
+            "",
+            f"- Mean |Δstance|: {self.opinion_change.get('mean_abs_delta', 0):.3f}",
+            f"- Flip rate: {self.opinion_change.get('flip_rate', 0):.3f}",
+            f"- N matched: {self.opinion_change.get('n', 0)}",
+            "",
+        ]
+        lines += MeasureReport._render_segments(self)  # reuse segment renderer
+        lines += ["## Notes", ""]
+        for n in self.notes:
+            lines.append(f"- {n}")
+        return "\n".join(lines)
