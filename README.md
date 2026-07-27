@@ -42,6 +42,11 @@ forum refusal-check "predict the next election"
                                         # test the input-side refusal layer
 ```
 
+**Population scope.** Personas are sampled per-state by default; load ACS for
+multiple states and sample nationally (population-weighted) with
+`forum personas sample --state US`. The v0 measure set is WA-only, so national
+sampling matters once national measures are added.
+
 A single deliberation in stub mode (no API key needed) is the fastest way to
 verify everything works: `forum deliberate i1631 --stub`. The full pipeline
 runs end-to-end and produces a report with pseudo-random stances. Every report

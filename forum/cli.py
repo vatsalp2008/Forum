@@ -85,6 +85,35 @@ def personas_info() -> None:
     console.print(t)
 
 
+@personas_app.command("sample")
+def personas_sample(
+    state: str = typer.Option("US", help="Two-letter state, or 'US' for a national sample"),
+    n: int = typer.Option(12, help="Number of personas"),
+    seed: int = typer.Option(42),
+) -> None:
+    """Preview a population sample (state or national) as a demographic summary."""
+    from collections import Counter
+
+    from personas.sample import sample_personas
+    from personas.schema import PopulationSpec
+
+    con = connect()
+    versions = get_source_versions(con)
+    if not versions:
+        console.print("[yellow]No sources loaded. Run `forum personas build`.[/yellow]")
+        raise typer.Exit(code=1)
+    spec = PopulationSpec(
+        name=f"{state}-adult-citizens", state=state, n=n, seed=seed,
+        source_versions=versions,
+    )
+    personas = sample_personas(con, spec)
+    by_state = Counter(p.demographics.state for p in personas)
+    by_party = Counter(p.priors.party_id for p in personas)
+    console.print(f"[green]{len(personas)}[/green] personas ({'national' if state.upper() in ('US', '*') else state})")
+    console.print(f"  states: {dict(by_state)}")
+    console.print(f"  party:  {dict(by_party)}")
+
+
 @app.command()
 def deliberate(
     measure_id: str = typer.Argument(..., help="Measure id, e.g. wa_i1631 or i1631"),

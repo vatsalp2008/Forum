@@ -23,6 +23,12 @@ from personas.schema import (
 
 K_ANONYMITY_MIN = 5
 
+# Sentinel population scope: sample across ALL loaded states, population-weighted.
+# ACS person weights (person_weight) are national population weights, so weighted
+# sampling over the union of states is population-proportional without any
+# per-state renormalization.
+NATIONAL = "US"
+
 
 def _persona_id(skeleton: DemographicSkeleton, seed: int, source_versions: dict) -> str:
     payload = json.dumps(
@@ -125,20 +131,24 @@ def sample_personas(
     if not source_versions:
         raise RuntimeError("No source versions recorded. Load ACS+ANES first.")
 
-    # Pool: skeleton cells from the requested state with k-anonymity enforced.
-    pool = con.execute(
-        """
-        SELECT state, puma, age_band, sex, race_eth, education,
-               income_band, person_weight, record_count
-        FROM acs_skeleton
-        WHERE state = ? AND record_count >= ?
-        """,
-        [spec.state, K_ANONYMITY_MIN],
-    ).fetchall()
+    # Pool: skeleton cells with k-anonymity enforced. A NATIONAL spec samples
+    # across every loaded state (population-weighted via person_weight); a
+    # state code restricts to that state.
+    national = spec.state.upper() in (NATIONAL, "*")
+    cols = ("SELECT state, puma, age_band, sex, race_eth, education, "
+            "income_band, person_weight, record_count FROM acs_skeleton ")
+    if national:
+        pool = con.execute(cols + "WHERE record_count >= ?", [K_ANONYMITY_MIN]).fetchall()
+    else:
+        pool = con.execute(
+            cols + "WHERE state = ? AND record_count >= ?",
+            [spec.state, K_ANONYMITY_MIN],
+        ).fetchall()
 
     if not pool:
+        scope = "any loaded state" if national else f"state={spec.state}"
         raise RuntimeError(
-            f"No ACS cells with k-anonymity >= {K_ANONYMITY_MIN} for state={spec.state}. "
+            f"No ACS cells with k-anonymity >= {K_ANONYMITY_MIN} for {scope}. "
             f"Load ACS data first."
         )
 
