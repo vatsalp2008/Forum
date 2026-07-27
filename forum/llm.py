@@ -99,6 +99,19 @@ def _retry_delay_seconds(err: Exception) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def _is_retryable(err: Exception) -> bool:
+    """Retry rate limits (429) and server errors (5xx); not permanent 4xx.
+
+    A 400 (bad request / no credit), 401, 403, or 404 will fail identically on
+    every attempt, so retrying just wastes time before the loud abort. Errors
+    without a recognizable status (network/transport) are treated as transient.
+    """
+    status = getattr(err, "status_code", None) or getattr(err, "code", None)
+    if not isinstance(status, int):
+        return True
+    return status == 429 or status == 408 or status >= 500
+
+
 class _LLMBase:
     """Shared throttle + retry + fail-loud skeleton for all providers."""
 
@@ -181,6 +194,9 @@ class _LLMBase:
                 break
             except Exception as e:
                 last_err = e
+                # Don't burn retries on a permanent client error (400/401/403/404).
+                if not _is_retryable(e) or attempt == self.max_retries - 1:
+                    break
                 # Honor a server-suggested retry delay (rate limits carry one);
                 # otherwise exponential backoff. Free-tier limits need seconds.
                 suggested = _retry_delay_seconds(e)

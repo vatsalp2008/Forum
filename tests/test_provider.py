@@ -8,8 +8,23 @@ from forum.llm import (
     AnthropicLLMClient,
     LLMClient,
     LLMError,
+    _is_retryable,
     make_llm_client,
 )
+
+
+def _err(status):
+    e = RuntimeError(f"status {status}")
+    e.status_code = status
+    return e
+
+
+def test_is_retryable_classification():
+    assert _is_retryable(_err(429)) is True
+    assert _is_retryable(_err(503)) is True
+    assert _is_retryable(_err(400)) is False   # no credit / bad request
+    assert _is_retryable(_err(404)) is False   # bad model id
+    assert _is_retryable(RuntimeError("network reset")) is True  # unknown -> transient
 
 
 def test_factory_routes_by_provider():
@@ -46,6 +61,26 @@ def test_anthropic_live_failure_raises_not_fabricates(monkeypatch):
     llm._client = type("_C", (), {"messages": _BoomMessages()})()
     with pytest.raises(LLMError):
         llm.generate(model="claude-opus-5", system="s", user="u", json_mode=True)
+
+
+def test_non_retryable_error_fails_fast(monkeypatch):
+    """A permanent 400 must abort after ONE attempt, not burn all retries."""
+    monkeypatch.setattr("forum.llm.time.sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    class _Msgs:
+        def create(self, *a, **k):
+            calls["n"] += 1
+            raise _err(400)
+
+    llm = AnthropicLLMClient(
+        meter=CostMeter(cap_usd=1.0), stub=False, api_key="fake",
+        min_interval_s=0.0, max_retries=5,
+    )
+    llm._client = type("_C", (), {"messages": _Msgs()})()
+    with pytest.raises(LLMError):
+        llm.generate(model="claude-opus-5", system="s", user="u")
+    assert calls["n"] == 1
 
 
 def test_anthropic_stub_backtest_stamps_provider(tmp_path, monkeypatch):
