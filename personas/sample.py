@@ -1,8 +1,18 @@
 """Stratified persona sampling with k-anonymity enforcement.
 
-The sampler refuses to draw from cells with record_count < K_ANONYMITY_MIN.
-Cells below the threshold are dropped from the sampling pool; their weight
-is redistributed proportionally to the remaining valid cells.
+The sampler never draws from a cell with fewer than K_ANONYMITY_MIN source
+records. Thin cells are *merged*, not dropped (ADR-002): every PUMA-level
+cell below the threshold is pooled with the other thin cells sharing its
+demographic combination into one statewide cell (location generalized to
+STATEWIDE_PUMA). Only combinations still below the threshold after pooling
+are refused.
+
+Why merge: dropping thin cells is not demographically neutral. Rare
+combinations are disproportionately minority residents, so dropping them
+removed 77% of Black and 47% of Hispanic Washingtonians but 8% of white
+ones, and whitened the persona pool (81% white vs 69% true). Merging
+recovers all but ~0.06% of the population while keeping the k>=5 guarantee
+on every attribute combination a persona reveals.
 """
 
 from __future__ import annotations
@@ -15,6 +25,7 @@ import numpy as np
 
 from personas.db import get_source_versions
 from personas.schema import (
+    STATEWIDE_PUMA,
     DemographicSkeleton,
     IssuePriors,
     Persona,
@@ -28,6 +39,82 @@ K_ANONYMITY_MIN = 5
 # sampling over the union of states is population-proportional without any
 # per-state renormalization.
 NATIONAL = "US"
+
+# Column order of a sampling-pool row.
+_POOL_COLS = ("state", "puma", "age_band", "sex", "race_eth", "education",
+              "income_band", "person_weight", "record_count")
+
+
+def _is_national(state: str) -> bool:
+    return state.upper() in (NATIONAL, "*")
+
+
+def _scope(state: str) -> tuple[str, list]:
+    """SQL WHERE clause + params restricting acs_skeleton to the population."""
+    if _is_national(state):
+        return "TRUE", []
+    return "state = ?", [state]
+
+
+def build_sampling_pool(con: duckdb.DuckDBPyConnection, state: str) -> list[tuple]:
+    """Return the k-anonymous sampling cells for a state (or NATIONAL).
+
+    Cells with >= K_ANONYMITY_MIN records are kept at PUMA level. Thinner
+    cells are pooled per (state x demographic combination) into a statewide
+    cell, which is kept only if the pool reaches the threshold. The result is
+    ordered so that seeded sampling over it is deterministic.
+    """
+    where, params = _scope(state)
+    sql = f"""
+    WITH base AS (
+        SELECT state, puma, age_band, sex, race_eth, education, income_band,
+               SUM(person_weight) AS person_weight, SUM(record_count) AS record_count
+        FROM acs_skeleton
+        WHERE {where}
+        GROUP BY state, puma, age_band, sex, race_eth, education, income_band
+    ),
+    merged AS (
+        SELECT state, '{STATEWIDE_PUMA}' AS puma, age_band, sex, race_eth, education, income_band,
+               SUM(person_weight) AS person_weight, SUM(record_count) AS record_count
+        FROM base
+        WHERE record_count < ?
+        GROUP BY state, age_band, sex, race_eth, education, income_band
+    )
+    SELECT {", ".join(_POOL_COLS)} FROM base WHERE record_count >= ?
+    UNION ALL
+    SELECT {", ".join(_POOL_COLS)} FROM merged WHERE record_count >= ?
+    ORDER BY state, puma, age_band, sex, race_eth, education, income_band
+    """
+    k = K_ANONYMITY_MIN
+    pool = con.execute(sql, params + [k, k, k]).fetchall()
+    _assert_k_anonymous(pool)
+    return pool
+
+
+def _assert_k_anonymous(pool: list[tuple]) -> None:
+    """Hard privacy guarantee (ADR-002): refuse to sample from any thin cell."""
+    thin = [row for row in pool if row[8] < K_ANONYMITY_MIN]
+    if thin:
+        raise RuntimeError(
+            f"k-anonymity violation: {len(thin)} sampling cell(s) have fewer than "
+            f"{K_ANONYMITY_MIN} source records. Refusing to sample."
+        )
+
+
+def sampling_coverage(con: duckdb.DuckDBPyConnection, state: str) -> float:
+    """Share of the population's weight that is sampleable after merging.
+
+    The remainder is the weight of demographic combinations too rare to
+    sample even statewide (refused to protect privacy).
+    """
+    where, params = _scope(state)
+    total = con.execute(
+        f"SELECT SUM(person_weight) FROM acs_skeleton WHERE {where}", params
+    ).fetchone()[0]
+    if not total:
+        return 0.0
+    kept = sum(row[7] for row in build_sampling_pool(con, state))
+    return float(kept / total)
 
 
 def _persona_id(skeleton: DemographicSkeleton, seed: int, source_versions: dict) -> str:
@@ -131,19 +218,11 @@ def sample_personas(
     if not source_versions:
         raise RuntimeError("No source versions recorded. Load ACS+ANES first.")
 
-    # Pool: skeleton cells with k-anonymity enforced. A NATIONAL spec samples
-    # across every loaded state (population-weighted via person_weight); a
-    # state code restricts to that state.
-    national = spec.state.upper() in (NATIONAL, "*")
-    cols = ("SELECT state, puma, age_band, sex, race_eth, education, "
-            "income_band, person_weight, record_count FROM acs_skeleton ")
-    if national:
-        pool = con.execute(cols + "WHERE record_count >= ?", [K_ANONYMITY_MIN]).fetchall()
-    else:
-        pool = con.execute(
-            cols + "WHERE state = ? AND record_count >= ?",
-            [spec.state, K_ANONYMITY_MIN],
-        ).fetchall()
+    # Pool: k-anonymous skeleton cells (thin cells merged statewide). A
+    # NATIONAL spec samples across every loaded state (population-weighted via
+    # person_weight); a state code restricts to that state.
+    national = _is_national(spec.state)
+    pool = build_sampling_pool(con, spec.state)
 
     if not pool:
         scope = "any loaded state" if national else f"state={spec.state}"

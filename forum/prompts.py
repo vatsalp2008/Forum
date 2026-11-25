@@ -6,9 +6,9 @@ Reproducibility requires that PROMPT_VERSION is recorded in every deliberation.
 
 from __future__ import annotations
 
-from personas.schema import Persona
+from personas.schema import STATEWIDE_PUMA, Persona
 
-PROMPT_VERSION = "v0.0.1"
+PROMPT_VERSION = "v0.0.2"
 
 
 CITIZEN_SYSTEM_PROMPT = """\
@@ -30,6 +30,13 @@ You will not be asked to predict elections, generate persuasive messaging, or ta
 """
 
 
+def _render_region(d) -> str:
+    # Merged (k-anonymity) cells generalize location to the whole state.
+    if d.puma == STATEWIDE_PUMA:
+        return f"{d.state} (area within the state not specified)"
+    return f"{d.state}, PUMA {d.puma}"
+
+
 def render_persona_backstory(persona: Persona) -> str:
     d = persona.demographics
     p = persona.priors
@@ -40,7 +47,7 @@ Demographic backstory:
 - Race/ethnicity: {d.race_eth}
 - Education: {d.education}
 - Income band: {d.income_band}
-- Region: {d.state}, PUMA {d.puma}
+- Region: {_render_region(d)}
 
 Issue-position priors (from ANES survey aggregates for this demographic profile):
 - Party identification: {p.party_id}

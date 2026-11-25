@@ -100,7 +100,7 @@ def personas_sample(
     """Preview a population sample (state or national) as a demographic summary."""
     from collections import Counter
 
-    from personas.sample import sample_personas
+    from personas.sample import sample_personas, sampling_coverage
     from personas.schema import PopulationSpec
 
     con = connect()
@@ -118,6 +118,10 @@ def personas_sample(
     console.print(f"[green]{len(personas)}[/green] personas ({'national' if state.upper() in ('US', '*') else state})")
     console.print(f"  states: {dict(by_state)}")
     console.print(f"  party:  {dict(by_party)}")
+    console.print(
+        f"  coverage: {sampling_coverage(con, state):.2%} of population weight is "
+        f"sampleable (the rest is too rare to sample without breaking k-anonymity)"
+    )
 
 
 @app.command()

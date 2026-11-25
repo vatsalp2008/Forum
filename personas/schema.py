@@ -36,6 +36,11 @@ IncomeBand = Literal[
 ]
 PartyID = Literal["dem", "ind", "rep"]
 
+# PUMA value for a k-anonymity-merged cell: thin PUMA-level cells are pooled
+# into one statewide cell per demographic combination (personas/sample.py), so
+# the persona's location within the state is deliberately not specified.
+STATEWIDE_PUMA = "statewide"
+
 
 class DemographicSkeleton(BaseModel):
     """Joint demographic attributes drawn from ACS PUMS."""
@@ -47,7 +52,7 @@ class DemographicSkeleton(BaseModel):
     race_eth: RaceEthnicity
     education: Education
     income_band: IncomeBand
-    puma: str  # 5-digit PUMA code (state-prefixed)
+    puma: str  # 5-digit PUMA code, or STATEWIDE_PUMA for a merged cell
     state: str  # 2-letter state code
 
 
