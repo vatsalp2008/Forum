@@ -29,6 +29,7 @@ from typing import Iterable
 from backtest.measure_loader import LoadedMeasure, load_measure
 from backtest.run import RUNS_DIR, _stub_personas
 from forum.budget import DEFAULT_DELIBERATION_BUDGET_USD, CostMeter
+from forum.determinism import stable_hash
 from forum.graph import _format_recent_statements, _vote_for_persona, run_deliberation
 from forum.llm import PROVIDER_GEMINI, make_llm_client
 from forum.refusal import RefusalError, check_request
@@ -81,7 +82,7 @@ def counterfactual_influence(
             # exact replay of the baseline call.
             counter = _vote_for_persona(
                 llm, p, spec, round_num=post_round,
-                seed=seed + (hash(sp) % 100_000),
+                seed=seed + stable_hash(sp, 100_000),
                 recent_statements_text=ablated_text,
             ).stance
             shifts.append(baseline[p.persona_id] - counter)

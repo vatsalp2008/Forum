@@ -17,6 +17,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from forum.determinism import stable_hash
 from forum.llm import LLMClient
 from forum.prompts import (
     CITIZEN_DELIBERATE_PROMPT,
@@ -49,7 +50,7 @@ def _vote_for_persona(
         user=VOTE_PROMPT.format(framing=measure.framing),
         json_mode=True,
         temperature=0.6,
-        seed=seed + hash(persona.persona_id) % 100_000,
+        seed=seed + stable_hash(persona.persona_id, 100_000),
     )
     try:
         obj = json.loads(resp.text)
@@ -153,7 +154,7 @@ def make_deliberate_node(llm: LLMClient):
                 system=CITIZEN_SYSTEM_PROMPT + "\n\n" + render_persona_backstory(speaker),
                 user=user_prompt,
                 temperature=0.7,
-                seed=seed + current_round * 1000 + hash(speaker.persona_id) % 100_000,
+                seed=seed + current_round * 1000 + stable_hash(speaker.persona_id, 100_000),
             )
             text = resp.text or "[empty]"
 

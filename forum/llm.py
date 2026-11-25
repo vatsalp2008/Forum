@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from forum.budget import CostMeter
+from forum.determinism import stable_hash
 
 # ---- Gemini defaults ----
 # gemini-2.5-flash-lite: fast, free-tier-eligible, native JSON mode. Verify
@@ -316,7 +317,7 @@ def _stub_generate(
     Mixes seed and prompt content so different prompts produce different
     canned responses while remaining reproducible.
     """
-    base = (seed or 0) ^ (hash(system + user) & 0xFFFFFFFF)
+    base = (seed or 0) ^ stable_hash(system + user)
     rng = random.Random(base)
     if json_mode:
         if '"stance"' in user or "stance" in system:
