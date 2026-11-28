@@ -49,6 +49,7 @@ def load_measure(measure_id: str) -> LoadedMeasure:
         pro_arguments=list(data.get("pro_arguments", [])),
         con_arguments=list(data.get("con_arguments", [])),
         n_rounds=int(data.get("n_rounds", 5)),
+        year=int(data["year"]) if data.get("year") is not None else None,
     )
     gt_block = data.get("ground_truth", {})
     gt = GroundTruth(

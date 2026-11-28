@@ -19,6 +19,7 @@ from backtest.metrics import (
     SensitivityRow,
     bootstrap_ci_yes_share,
     brier_score,
+    compute_baselines,
     mean_absolute_error,
     opinion_change,
     predicted_yes_pct,
@@ -99,6 +100,7 @@ def run_one(
     delta = opinion_change(pre_votes, post_votes)
     ci_low, ci_high = bootstrap_ci_yes_share(post_votes, seed=seed)
     segments = segment_breakdown(personas, pre_votes, post_votes)
+    baselines = compute_baselines(personas, pre_votes, actual, measure.topic)
 
     notes: list[str] = []
     if stub:
@@ -129,6 +131,7 @@ def run_one(
         ci_low=ci_low,
         ci_high=ci_high,
         segments=segments,
+        baselines=baselines,
     )
 
     # Binding refusal layer (methodology §6), output side: the Output
@@ -241,6 +244,9 @@ def run_multigroup(
         opinion_change=delta,
         segments=segments,
         notes=notes,
+        baselines=compute_baselines(
+            all_personas, all_pre, measure.ground_truth.yes_pct, measure.topic
+        ),
     )
 
     report_text = report.render()
@@ -277,6 +283,7 @@ def run_sensitivity(
     n_personas: int = 12,
     seeds: Iterable[int] = (1, 2, 3, 4, 5),
     stub: bool = False,
+    provider: str = PROVIDER_GEMINI,
 ) -> list[SensitivityRow]:
     """Run each (measure, seed) combination; emit per-run reports plus an
     aggregate sensitivity report."""
@@ -291,16 +298,20 @@ def run_sensitivity(
     for mid in measure_ids:
         preds: list[float] = []
         maes: list[float] = []
+        pre_maes: list[float] = []
         briers: list[float] = []
         for seed in seeds:
-            r = run_one(mid, n_personas=n_personas, seed=seed, stub=stub, run_id=run_id)
+            r = run_one(mid, n_personas=n_personas, seed=seed, stub=stub, run_id=run_id,
+                        provider=provider)
             preds.append(r.predicted_yes_pct_weighted)
             maes.append(r.mae_weighted)
+            pre_maes.append(r.baselines.pre_vote_mae if r.baselines else float("nan"))
             briers.append(r.brier)
         actual = load_measure(mid).ground_truth.yes_pct
         rows.append(SensitivityRow(
             measure_id=mid, actual_yes_pct=actual, seeds=seeds,
             predicted_weighted=preds, mae_weighted=maes, brier=briers,
+            pre_mae_weighted=pre_maes,
         ))
 
     run_dir = RUNS_DIR / run_id
@@ -317,24 +328,33 @@ def _write_summary(run_id: str, reports: list[MeasureReport]) -> None:
         "",
         f"Run id: {run_id}",
         "",
-        "| Measure | Personas | Predicted (weighted) | Actual | MAE | Brier | Cost |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Measure | Personas | Predicted (weighted) | Actual | MAE | Pre-vote MAE "
+        "| Prior-only MAE | Coin-flip MAE | Brier | Cost |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
+    fmt = lambda x: "—" if x is None else f"{x:.1f}"  # noqa: E731
     for r in reports:
+        b = r.baselines
         lines.append(
             f"| {r.measure_id} | {r.n_personas} | {r.predicted_yes_pct_weighted:.1f}% "
-            f"| {r.actual_yes_pct:.1f}% | {r.mae_weighted:.1f} | {r.brier:.4f} "
-            f"| ${r.cost_usd:.4f} |"
+            f"| {r.actual_yes_pct:.1f}% | {r.mae_weighted:.1f} "
+            f"| {fmt(b.pre_vote_mae if b else None)} | {fmt(b.prior_only_mae if b else None)} "
+            f"| {fmt(b.coin_flip_mae if b else None)} | {r.brier:.4f} | ${r.cost_usd:.4f} |"
         )
     if reports:
-        avg_mae = sum(r.mae_weighted for r in reports) / len(reports)
-        avg_brier = sum(r.brier for r in reports) / len(reports)
-        total_cost = sum(r.cost_usd for r in reports)
+        mean = lambda xs: sum(xs) / len(xs) if xs else float("nan")  # noqa: E731
+        with_b = [r for r in reports if r.baselines]
+        with_prior = [r for r in with_b if r.baselines.prior_only_mae is not None]
         lines += [
             "",
-            f"Mean MAE (weighted): {avg_mae:.2f} points",
-            f"Mean Brier: {avg_brier:.4f}",
-            f"Total cost: ${total_cost:.4f}",
+            f"Mean MAE (weighted): {mean([r.mae_weighted for r in reports]):.2f} points",
+            f"Mean pre-vote MAE (no deliberation): "
+            f"{mean([r.baselines.pre_vote_mae for r in with_b]):.2f} points",
+            f"Mean coin-flip MAE: {mean([r.baselines.coin_flip_mae for r in with_b]):.2f} points",
+            f"Mean prior-only MAE ({len(with_prior)} measures with a matching survey item): "
+            f"{mean([r.baselines.prior_only_mae for r in with_prior]):.2f} points",
+            f"Mean Brier: {mean([r.brier for r in reports]):.4f}",
+            f"Total cost: ${sum(r.cost_usd for r in reports):.4f}",
         ]
     (run_dir / "summary.md").write_text("\n".join(lines))
 

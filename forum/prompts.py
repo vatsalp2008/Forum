@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from personas.schema import STATEWIDE_PUMA, Persona
 
-PROMPT_VERSION = "v0.0.2"
+PROMPT_VERSION = "v0.1.0"
 
 
 CITIZEN_SYSTEM_PROMPT = """\
@@ -80,23 +80,38 @@ You are the moderator of a Deliberative Polling session. Present a balanced brie
 - Be 200-400 words
 - Present the strongest argument FOR the policy
 - Present the strongest argument AGAINST the policy
-- State known facts neutrally
-- Cite the briefing sources provided
-- NOT reveal any historical outcome of the measure (this is a research backtest; outcome reveal would contaminate the deliberation)
+- State the background facts neutrally
+- Attribute claims to the kinds of sources listed (e.g. "the official fiscal analysis", "supporters", "opponents")
+- Treat the policy as a proposal under consideration. Do not mention election results, polling, vote counts, ballot or initiative numbers, or dates.
 
-Policy: {title}
-Framing: {framing}
+Policy question: {framing}
 
-Briefing sources you may draw from:
+Background facts (neutral summary):
+{facts}
+
+Source materials you may attribute claims to:
 {sources}
 
-Pro arguments to incorporate:
+Arguments for the policy:
 {pro}
 
-Con arguments to incorporate:
+Arguments against the policy:
 {con}
 
 Output only the briefing text. No preamble.
+"""
+
+
+# Pinned into every citizen's context after the briefing (DP phase 2 onward),
+# so the balanced information is never pushed out of view by later statements.
+BRIEFING_CONTEXT = """\
+Briefing presented by the moderator to all participants:
+{briefing}
+"""
+
+TRANSCRIPT_CONTEXT = """\
+The full deliberation (every participant statement, in order):
+{transcript}
 """
 
 
@@ -133,12 +148,13 @@ You are a fact-checker reviewing one statement from a citizen deliberation.
 
 Statement: {statement}
 
-Briefing sources available: {sources}
+Reference facts about the policy (from the curated briefing materials):
+{facts}
 
 Flag the statement ONLY if it contains a clear, specific factual error.
 Examples that should be flagged:
 - A specific number/statistic that is plainly wrong (e.g., "the policy will raise gas prices by $5/gallon")
-- A claim about the policy's content that contradicts the briefing
+- A claim about the policy's content that contradicts the reference facts
 - A historical fact that is verifiably false
 
 Do NOT flag:

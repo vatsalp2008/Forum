@@ -10,7 +10,7 @@ A multi-agent LLM system that:
 - Samples synthetic personas from joint distributions of public demographic microdata (ACS PUMS): adult citizens, weighted toward likely voters with validated turnout (CCES), with party ID calibrated to each state and issue-position priors from published survey microdata (ANES + CCES).
 - Runs a deliberative-polling protocol (Fishkin) over those personas: information presentation → small-group deliberation → opinion measurement.
 - Produces a deliberation transcript, a weighted opinion-change report, and a per-segment outcome breakdown.
-- Backtests its predictions against resolved ballot measures and reports calibration error.
+- Backtests its predictions against resolved ballot measures and reports calibration error alongside baselines: the personas' own pre-deliberation vote, survey priors with no LLM, and a coin flip.
 
 ## What FORUM is not
 

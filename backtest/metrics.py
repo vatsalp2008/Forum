@@ -16,6 +16,16 @@ from forum.state import Vote
 # small-N suppression, matching the persona sampler's K_ANONYMITY_MIN).
 SEGMENT_MIN_N = 5
 
+COIN_FLIP_PCT = 50.0
+
+# Survey items that directly measure support for a measure's topic, used for
+# the prior-only (no-LLM) baseline. Topics without a matching item (e.g.
+# labor, drug policy) get no prior-only baseline rather than a forced proxy.
+TOPIC_PRIOR_FIELD = {
+    "climate": "p_climate_action_support",
+    "firearms": "p_gun_restriction_support",
+}
+
 
 def predicted_yes_pct(post_votes: list[Vote], threshold: float = 0.5) -> float:
     """Return predicted yes-percentage from post-deliberation stances.
@@ -73,6 +83,80 @@ def bootstrap_ci_yes_share(
     lo_idx = int((alpha / 2) * n_boot)
     hi_idx = min(n_boot - 1, int((1 - alpha / 2) * n_boot))
     return (shares[lo_idx], shares[hi_idx])
+
+
+def prior_only_yes_pct(personas: list, topic: str) -> float | None:
+    """Predicted yes-share straight from the personas' survey priors, no LLM.
+
+    Mean of the topic-matched prior (e.g. P(support greenhouse-emissions
+    regulation) for a climate measure). None when no survey item matches.
+    """
+    item = TOPIC_PRIOR_FIELD.get(topic)
+    if item is None or not personas:
+        return None
+    return 100.0 * sum(getattr(p.priors, item) for p in personas) / len(personas)
+
+
+@dataclass
+class Baselines:
+    """What the deliberation must beat to be adding information.
+
+    - pre-vote: the same personas polled before any briefing or discussion
+      (DP phase 1). Post-deliberation MAE below this means deliberation helped.
+    - prior-only: the survey priors alone, no LLM (only when an item matches).
+    - coin flip: always predicting 50%.
+    """
+
+    pre_vote_pct: float
+    pre_vote_mae: float
+    coin_flip_mae: float
+    prior_item: str | None = None
+    prior_only_pct: float | None = None
+    prior_only_mae: float | None = None
+
+
+def compute_baselines(
+    personas: list, pre_votes: list[Vote], actual_pct: float, topic: str
+) -> Baselines:
+    pre = predicted_yes_share_weighted(pre_votes)
+    prior = prior_only_yes_pct(personas, topic)
+    return Baselines(
+        pre_vote_pct=pre,
+        pre_vote_mae=mean_absolute_error(pre, actual_pct),
+        coin_flip_mae=mean_absolute_error(COIN_FLIP_PCT, actual_pct),
+        prior_item=TOPIC_PRIOR_FIELD.get(topic),
+        prior_only_pct=prior,
+        prior_only_mae=None if prior is None else mean_absolute_error(prior, actual_pct),
+    )
+
+
+def render_baselines(b: Baselines, post_pct: float, post_mae: float) -> list[str]:
+    """Markdown section comparing the deliberation to its baselines."""
+    lines = [
+        "## Baselines: does deliberation add anything?",
+        "",
+        "| Method | Predicted yes | MAE |",
+        "|---|---:|---:|",
+        f"| FORUM, after deliberation | {post_pct:.1f}% | {post_mae:.1f} |",
+        f"| Same personas before deliberation (pre-vote) | {b.pre_vote_pct:.1f}% | {b.pre_vote_mae:.1f} |",
+    ]
+    if b.prior_only_pct is not None:
+        lines.append(
+            f"| Survey prior only, no LLM ({b.prior_item}) | {b.prior_only_pct:.1f}% "
+            f"| {b.prior_only_mae:.1f} |"
+        )
+    else:
+        lines.append("| Survey prior only, no LLM | n/a (no matching survey item) | — |")
+    lines.append(f"| Coin flip | {COIN_FLIP_PCT:.1f}% | {b.coin_flip_mae:.1f} |")
+    gain = b.pre_vote_mae - post_mae
+    if abs(gain) < 0.05:
+        verdict = "no change in accuracy from deliberation"
+    elif gain > 0:
+        verdict = f"deliberation improved accuracy by {gain:.1f} pts"
+    else:
+        verdict = f"deliberation made accuracy worse by {-gain:.1f} pts"
+    lines += ["", f"- Deliberation vs. pre-vote: MAE {post_mae:.1f} vs {b.pre_vote_mae:.1f} ({verdict})", ""]
+    return lines
 
 
 def segment_breakdown(
@@ -150,6 +234,17 @@ class SensitivityRow:
     predicted_weighted: list[float]
     mae_weighted: list[float]
     brier: list[float]
+    pre_mae_weighted: list[float] = field(default_factory=list)
+
+    @property
+    def coin_flip_mae(self) -> float:
+        return mean_absolute_error(COIN_FLIP_PCT, self.actual_yes_pct)
+
+    @property
+    def mean_pre_mae(self) -> float:
+        if not self.pre_mae_weighted:
+            return float("nan")
+        return sum(self.pre_mae_weighted) / len(self.pre_mae_weighted)
 
     @property
     def mean_predicted(self) -> float:
@@ -194,8 +289,8 @@ def render_sensitivity_report(rows: list[SensitivityRow], n_personas: int) -> st
         "",
         "## Aggregate across seeds",
         "",
-        "| Measure | Actual | Mean Predicted | 95% CI | Std Dev | Min | Max | Spread | Mean MAE | Mean Brier |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Measure | Actual | Mean Predicted | 95% CI | Std Dev | Min | Max | Spread | Mean MAE | Mean pre-vote MAE | Coin-flip MAE | Mean Brier |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in rows:
         spread = r.max_predicted - r.min_predicted
@@ -204,7 +299,8 @@ def render_sensitivity_report(rows: list[SensitivityRow], n_personas: int) -> st
             f"| {r.measure_id} | {r.actual_yes_pct:.1f}% "
             f"| {r.mean_predicted:.1f}% | {ci_lo:.1f}–{ci_hi:.1f} | {r.stdev_predicted:.2f} "
             f"| {r.min_predicted:.1f}% | {r.max_predicted:.1f}% "
-            f"| {spread:.1f} pts | {r.mean_mae:.2f} | {r.mean_brier:.4f} |"
+            f"| {spread:.1f} pts | {r.mean_mae:.2f} | {r.mean_pre_mae:.2f} "
+            f"| {r.coin_flip_mae:.2f} | {r.mean_brier:.4f} |"
         )
     lines += ["", "## Per-seed detail", "", "| Measure | Seed | Predicted | MAE | Brier |", "|---|---:|---:|---:|---:|"]
     for r in rows:
@@ -218,6 +314,8 @@ def render_sensitivity_report(rows: list[SensitivityRow], n_personas: int) -> st
         "- **Low std dev AND high MAE**: methodology is biased but reproducible. Investigate per-segment errors.",
         "- **High std dev (>5 pts)**: result is noise-dominated. Increase N or rethink methodology.",
         "- **Wide spread relative to MAE**: a single-seed report would be misleading. Always report variance.",
+        "- **Mean MAE not below the pre-vote MAE**: deliberation is not adding accuracy over simply polling the personas.",
+        "- **Mean MAE not below the coin-flip MAE**: the prediction carries no information about this measure.",
     ]
     return "\n".join(lines)
 
@@ -244,6 +342,7 @@ class MeasureReport:
     ci_low: float = 0.0
     ci_high: float = 0.0
     segments: dict = field(default_factory=dict)
+    baselines: Baselines | None = None
 
     def render(self) -> str:
         lines = [
@@ -269,6 +368,12 @@ class MeasureReport:
             f"- MAE (weighted): {self.mae_weighted:.1f} pts",
             f"- Brier: {self.brier:.4f}",
             "",
+        ]
+        if self.baselines is not None:
+            lines += render_baselines(
+                self.baselines, self.predicted_yes_pct_weighted, self.mae_weighted
+            )
+        lines += [
             "## Opinion change (pre vs. post deliberation)",
             "",
             f"- Mean |Δstance|: {self.opinion_change.get('mean_abs_delta', 0):.3f}",
@@ -334,6 +439,7 @@ class MultiGroupReport:
     opinion_change: dict
     segments: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    baselines: Baselines | None = None
 
     @property
     def between_group_mean(self) -> float:
@@ -386,8 +492,10 @@ class MultiGroupReport:
         ]
         for i, p in enumerate(self.group_predicted):
             lines.append(f"| {i} | {p:.1f}% |")
+        lines.append("")
+        if self.baselines is not None:
+            lines += render_baselines(self.baselines, self.pooled_predicted, self.mae_weighted)
         lines += [
-            "",
             "## Opinion change (pooled, pre vs. post)",
             "",
             f"- Mean |Δstance|: {self.opinion_change.get('mean_abs_delta', 0):.3f}",

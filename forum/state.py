@@ -42,6 +42,9 @@ class MeasureSpec(BaseModel):
     pro_arguments: list[str]
     con_arguments: list[str]
     n_rounds: int = 5
+    # Year the measure was on the ballot. Never shown to agents: it is only
+    # used to redact the year from model output (forum/redaction.py).
+    year: int | None = None
 
 
 class DeliberationState(TypedDict, total=False):

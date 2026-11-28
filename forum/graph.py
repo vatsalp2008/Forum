@@ -1,11 +1,23 @@
 """Deliberative Polling protocol implemented as a LangGraph workflow.
 
 Nodes:
-    pre_vote      -> initial stance per persona (DP phase 1)
+    pre_vote      -> initial stance per persona (DP phase 1; no information yet)
     briefing      -> moderator presents balanced briefing (DP phase 2)
     deliberate    -> R rounds of speaker-selection + statements (DP phase 3)
     post_vote     -> final stance per persona (DP phase 4)
-    synthesize    -> output report
+
+What each agent sees:
+    - From phase 2 on, the moderator's briefing is *pinned* into every citizen's
+      context. It used to sit in the rolling window of recent statements and
+      fell out of view: only 6 of 20 speakers and none of the final voters saw it.
+    - A speaker sees the last SPEAKER_CONTEXT_STATEMENTS citizen statements
+      (conversational recency).
+    - A final voter sees the whole citizen transcript, as a real DP participant
+      who sat through the discussion would.
+
+Contamination control (methodology §4): no agent sees the measure's title,
+ballot number, or year. Curated materials pass through redact_curated, and
+model output passes through redact_generated before other agents see it.
 """
 
 from __future__ import annotations
@@ -20,15 +32,78 @@ from langgraph.graph import END, StateGraph
 from forum.determinism import stable_hash
 from forum.llm import LLMClient
 from forum.prompts import (
+    BRIEFING_CONTEXT,
     CITIZEN_DELIBERATE_PROMPT,
     CITIZEN_SYSTEM_PROMPT,
     CRITIC_FACT_CHECK_PROMPT,
     MODERATOR_BRIEFING_PROMPT,
     PROMPT_VERSION,
+    TRANSCRIPT_CONTEXT,
     VOTE_PROMPT,
     render_persona_backstory,
 )
+from forum.redaction import measure_number, redact_curated, redact_generated
 from forum.state import DeliberationState, MeasureSpec, Statement, Vote
+
+MODERATOR = "moderator"
+
+# How many recent citizen statements a speaker sees when taking a turn.
+SPEAKER_CONTEXT_STATEMENTS = 6
+
+
+# ---------- what agents see ----------
+
+def briefing_text(statements: list[Statement]) -> str:
+    """The moderator's briefing (empty before phase 2)."""
+    for s in statements:
+        if s.speaker_id == MODERATOR:
+            return s.text
+    return ""
+
+
+def format_transcript(
+    statements: list[Statement],
+    limit: int | None = None,
+    exclude_speaker: str | None = None,
+) -> str:
+    """Citizen statements in order (the briefing is pinned separately).
+
+    limit keeps only the most recent N; exclude_speaker drops one speaker's
+    statements (used by the counterfactual persuasion graph).
+    """
+    lines = [s for s in statements
+             if s.speaker_id != MODERATOR and s.speaker_id != exclude_speaker]
+    if limit is not None:
+        lines = lines[-limit:]
+    if not lines:
+        return "(no statements yet)"
+    out = []
+    for s in lines:
+        flag = " [flagged by fact-checker]" if s.flagged_by_critic else ""
+        out.append(f"- {s.speaker_id} (round {s.round}){flag}: {s.text}")
+    return "\n".join(out)
+
+
+def post_vote_context(
+    statements: list[Statement], exclude_speaker: str | None = None
+) -> tuple[str, str]:
+    """(briefing, transcript) a final voter sees.
+
+    Shared by the post_vote node and the persuasion graph, so a counterfactual
+    vote differs from the real final vote *only* by the removed speaker.
+    """
+    return briefing_text(statements), format_transcript(statements, exclude_speaker=exclude_speaker)
+
+
+def _citizen_system(persona, briefing: str = "") -> str:
+    system = CITIZEN_SYSTEM_PROMPT + "\n\n" + render_persona_backstory(persona)
+    if briefing:
+        system += "\n\n" + BRIEFING_CONTEXT.format(briefing=briefing)
+    return system
+
+
+def _redaction_keys(measure: MeasureSpec) -> tuple[str | None, int | None]:
+    return measure_number(measure.measure_id), measure.year
 
 
 # ---------- helpers ----------
@@ -39,15 +114,17 @@ def _vote_for_persona(
     measure: MeasureSpec,
     round_num: int,
     seed: int,
-    recent_statements_text: str = "",
+    briefing: str = "",
+    transcript: str = "",
 ) -> Vote:
-    system = CITIZEN_SYSTEM_PROMPT + "\n\n" + render_persona_backstory(persona)
-    if recent_statements_text:
-        system += "\n\nRecent deliberation:\n" + recent_statements_text
+    system = _citizen_system(persona, briefing)
+    if transcript:
+        system += "\n" + TRANSCRIPT_CONTEXT.format(transcript=transcript)
+    number, _ = _redaction_keys(measure)
     resp = llm.generate(
         model=llm.citizen_model,
         system=system,
-        user=VOTE_PROMPT.format(framing=measure.framing),
+        user=VOTE_PROMPT.format(framing=redact_curated(measure.framing, number)),
         json_mode=True,
         temperature=0.6,
         seed=seed + stable_hash(persona.persona_id, 100_000),
@@ -66,17 +143,6 @@ def _vote_for_persona(
         confidence=max(0.0, min(1.0, confidence)),
         rationale=rationale,
     )
-
-
-def _format_recent_statements(statements: list[Statement], limit: int = 6) -> str:
-    if not statements:
-        return "(no statements yet)"
-    recent = statements[-limit:]
-    lines = []
-    for s in recent:
-        flag = " [flagged]" if s.flagged_by_critic else ""
-        lines.append(f"- {s.speaker_id} (round {s.round}){flag}: {s.text}")
-    return "\n".join(lines)
 
 
 # ---------- nodes ----------
@@ -98,24 +164,26 @@ def make_briefing_node(llm: LLMClient):
         measure = state["measure"]
         statements = list(state.get("statements", []))
         seed = state.get("seed", 0)
+        number, year = _redaction_keys(measure)
+        bullet = lambda items: "\n".join(f"- {redact_curated(x, number)}" for x in items)  # noqa: E731
         resp = llm.generate(
             model=llm.moderator_model,
             system="You are an impartial deliberation moderator.",
             user=MODERATOR_BRIEFING_PROMPT.format(
-                title=measure.title,
-                framing=measure.framing,
-                sources="\n".join(f"- {s}" for s in measure.briefing_sources),
-                pro="\n".join(f"- {a}" for a in measure.pro_arguments),
-                con="\n".join(f"- {a}" for a in measure.con_arguments),
+                framing=redact_curated(measure.framing, number),
+                facts=redact_curated(measure.briefing, number),
+                sources=bullet(measure.briefing_sources),
+                pro=bullet(measure.pro_arguments),
+                con=bullet(measure.con_arguments),
             ),
             temperature=0.4,
             seed=seed,
         )
         statements.append(
             Statement(
-                speaker_id="moderator",
+                speaker_id=MODERATOR,
                 round=0,
-                text=resp.text or "[empty briefing]",
+                text=redact_generated(resp.text or "[empty briefing]", number, year),
                 issued_at=datetime.now(timezone.utc),
             )
         )
@@ -128,44 +196,42 @@ def make_deliberate_node(llm: LLMClient):
         measure = state["measure"]
         personas = state["personas"]
         statements = list(state.get("statements", []))
-        votes = list(state.get("votes", []))
         seed = state.get("seed", 0)
         current_round = state.get("current_round", 0) + 1
         rng = random.Random(seed + current_round)
+        number, year = _redaction_keys(measure)
+        briefing = briefing_text(statements)
+        facts = redact_curated(measure.briefing, number)
 
         # Speaker selection: pick K speakers per round; round-robin biased by speaking count.
         speak_counts = {p.persona_id: 0 for p in personas}
         for s in statements:
-            if s.speaker_id != "moderator":
+            if s.speaker_id != MODERATOR:
                 speak_counts[s.speaker_id] = speak_counts.get(s.speaker_id, 0) + 1
         eligible_sorted = sorted(personas, key=lambda p: (speak_counts[p.persona_id], p.persona_id))
         speakers_this_round = eligible_sorted[: max(1, len(personas) // 3)]
         rng.shuffle(speakers_this_round)
 
         for speaker in speakers_this_round:
-            recent_text = _format_recent_statements(statements)
             user_prompt = CITIZEN_DELIBERATE_PROMPT.format(
                 round_num=current_round,
                 total_rounds=measure.n_rounds,
-                recent_statements=recent_text,
+                recent_statements=format_transcript(statements, limit=SPEAKER_CONTEXT_STATEMENTS),
             )
             resp = llm.generate(
                 model=llm.citizen_model,
-                system=CITIZEN_SYSTEM_PROMPT + "\n\n" + render_persona_backstory(speaker),
+                system=_citizen_system(speaker, briefing),
                 user=user_prompt,
                 temperature=0.7,
                 seed=seed + current_round * 1000 + stable_hash(speaker.persona_id, 100_000),
             )
-            text = resp.text or "[empty]"
+            text = redact_generated(resp.text or "[empty]", number, year)
 
-            # Critic fact-check (cheap; on each statement)
+            # Critic fact-check against the curated briefing facts.
             critic = llm.generate(
                 model=llm.critic_model,
                 system="You are a fact-checker. Be precise; do not flag normative disagreement.",
-                user=CRITIC_FACT_CHECK_PROMPT.format(
-                    statement=text,
-                    sources="\n".join(measure.briefing_sources),
-                ),
+                user=CRITIC_FACT_CHECK_PROMPT.format(statement=text, facts=facts),
                 json_mode=True,
                 temperature=0.0,
                 seed=seed,
@@ -200,14 +266,15 @@ def make_post_vote_node(llm: LLMClient):
         statements = state.get("statements", [])
         votes = list(state.get("votes", []))
         seed = state.get("seed", 0)
-        recent = _format_recent_statements(statements, limit=20)
+        briefing, transcript = post_vote_context(statements)
         for p in personas:
             votes.append(
                 _vote_for_persona(
                     llm, p, measure,
                     round_num=measure.n_rounds + 1,
                     seed=seed,
-                    recent_statements_text=recent,
+                    briefing=briefing,
+                    transcript=transcript,
                 )
             )
         return {**state, "votes": votes}

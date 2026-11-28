@@ -180,19 +180,22 @@ def sensitivity(
     n: int = typer.Option(12),
     seeds: str = typer.Option("1,2,3,4,5", help="Comma-separated seed list"),
     stub: bool = typer.Option(False, help="Run without LLM calls"),
+    provider: str = typer.Option("gemini", help="Model family: gemini | anthropic"),
 ) -> None:
     """Run a sensitivity sweep: each measure x each seed, with aggregate stats."""
     mids = None
     if measures:
         mids = [m if m.startswith("wa_") else f"wa_{m}" for m in measures]
     seed_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
-    rows = run_sensitivity(measure_ids=mids, n_personas=n, seeds=seed_list, stub=stub)
+    rows = run_sensitivity(measure_ids=mids, n_personas=n, seeds=seed_list, stub=stub,
+                           provider=provider)
     for r in rows:
         spread = r.max_predicted - r.min_predicted
         console.print(
             f"[green]{r.measure_id}[/green] | actual {r.actual_yes_pct:.1f}% "
             f"| mean predicted {r.mean_predicted:.1f}% (sd {r.stdev_predicted:.2f}) "
-            f"| spread {spread:.1f} pts | mean MAE {r.mean_mae:.2f}"
+            f"| spread {spread:.1f} pts | mean MAE {r.mean_mae:.2f} "
+            f"(pre-vote {r.mean_pre_mae:.2f}, coin flip {r.coin_flip_mae:.2f})"
         )
 
 
@@ -239,7 +242,8 @@ def persuasion_graph(
     for r in rows:
         console.print(
             f"[green]{r.speaker_id}[/green] | {r.n_statements} stmts "
-            f"| |shift| {r.mean_abs_shift:.3f} | signed {r.mean_signed_shift:+.3f}"
+            f"| |shift| {r.mean_abs_shift:.3f} | signed {r.mean_signed_shift:+.3f} "
+            f"| {'above' if r.above_noise else 'within'} noise floor {r.noise_floor:.3f}"
         )
 
 
