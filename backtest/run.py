@@ -7,6 +7,7 @@ metrics, and writes a report to backtest/runs/<run_id>/<measure_id>.md.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -38,6 +39,8 @@ from personas.schema import PopulationSpec
 
 RUNS_DIR = Path("backtest/runs")
 
+log = logging.getLogger(__name__)
+
 
 def run_one(
     measure_id: str,
@@ -51,6 +54,9 @@ def run_one(
     run_id = run_id or time.strftime("%Y%m%d-%H%M%S") + ("-stub" if stub else "")
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    log.info("room %s-seed%d: started (%d personas, %s)", measure_id, seed, n_personas,
+             "stub" if stub else "live")
 
     measure: LoadedMeasure = load_measure(measure_id)
 
@@ -149,6 +155,8 @@ def run_one(
     (run_dir / f"{stem}.json").write_text(
         json.dumps(_serialize_run(final, asdict(report)), default=str, indent=2)
     )
+    log.info("room %s: done in %.1f min, predicted yes %.1f%% (actual %.1f%%)", stem,
+             (time.monotonic() - started) / 60, pred_weighted, actual)
     return report
 
 
@@ -278,21 +286,73 @@ def run_all(
     return reports
 
 
+class ResumeError(ValueError):
+    """A saved room can't be reused because it was run differently."""
+
+
+def new_sensitivity_run_id(stub: bool) -> str:
+    return time.strftime("%Y%m%d-%H%M%S") + "-sens" + ("-stub" if stub else "")
+
+
+def completed_rooms(run_id: str) -> dict[tuple[str, int], dict]:
+    """The saved report of every finished room in a run, keyed by (measure, seed).
+
+    run_one writes a room's JSON only after its deliberation completes, so an
+    interrupted room leaves nothing behind and simply runs again on resume.
+    """
+    rooms: dict[tuple[str, int], dict] = {}
+    for path in sorted((RUNS_DIR / run_id).glob("*-seed*.json")):
+        mid, _, seed = path.stem.rpartition("-seed")
+        if seed.isdigit():
+            rooms[(mid, int(seed))] = json.loads(path.read_text())["report"]
+    return rooms
+
+
+def _expected_setup(provider: str, stub: bool, n_personas: int) -> dict:
+    """What a room run now would be stamped with. Building a stub client makes
+    no API call but resolves the same models (FORUM_GEMINI_MODEL included)."""
+    model = "stub" if stub else make_llm_client(provider, meter=CostMeter(), stub=True).model_version
+    return {"mode": "stub" if stub else "live", "model_version": model, "n_personas": n_personas}
+
+
+def _check_same_setup(report: dict, expected: dict, room: str) -> None:
+    for key, want in expected.items():
+        got = report.get(key)
+        if got != want:
+            raise ResumeError(
+                f"Can't resume: room {room} was saved with {key}={got!r}, but this run "
+                f"would use {want!r}. Start a new sweep rather than mixing the two."
+            )
+
+
 def run_sensitivity(
     measure_ids: Iterable[str] | None = None,
     n_personas: int = 12,
     seeds: Iterable[int] = (1, 2, 3, 4, 5),
     stub: bool = False,
     provider: str = PROVIDER_GEMINI,
+    run_id: str | None = None,
 ) -> list[SensitivityRow]:
     """Run each (measure, seed) combination; emit per-run reports plus an
-    aggregate sensitivity report."""
+    aggregate sensitivity report.
+
+    Passing the run_id of an interrupted sweep resumes it: rooms already saved
+    in that run directory are reused instead of re-run, after checking that
+    they share this run's mode (stub/live), model and room size. Nothing is
+    called until every reused room has passed that check.
+    """
     from backtest.measure_loader import list_measures, load_measure
     if measure_ids is None:
         measure_ids = list_measures()
     measure_ids = list(measure_ids)
     seeds = list(seeds)
-    run_id = time.strftime("%Y%m%d-%H%M%S") + "-sens" + ("-stub" if stub else "")
+    run_id = run_id or new_sensitivity_run_id(stub)
+
+    expected = _expected_setup(provider, stub, n_personas)
+    saved = {room: report for room, report in completed_rooms(run_id).items()
+             if room[0] in measure_ids and room[1] in seeds}
+    for (mid, seed), report in saved.items():
+        _check_same_setup(report, expected, f"{mid}-seed{seed}")
 
     rows: list[SensitivityRow] = []
     for mid in measure_ids:
@@ -301,12 +361,18 @@ def run_sensitivity(
         pre_maes: list[float] = []
         briers: list[float] = []
         for seed in seeds:
-            r = run_one(mid, n_personas=n_personas, seed=seed, stub=stub, run_id=run_id,
-                        provider=provider)
-            preds.append(r.predicted_yes_pct_weighted)
-            maes.append(r.mae_weighted)
-            pre_maes.append(r.baselines.pre_vote_mae if r.baselines else float("nan"))
-            briers.append(r.brier)
+            report = saved.get((mid, seed))
+            if report is not None:
+                log.info("room %s-seed%d: reused from the saved run", mid, seed)
+            else:
+                r = run_one(mid, n_personas=n_personas, seed=seed, stub=stub, run_id=run_id,
+                            provider=provider)
+                report = asdict(r)
+                _check_same_setup(report, expected, f"{mid}-seed{seed}")
+            preds.append(report["predicted_yes_pct_weighted"])
+            maes.append(report["mae_weighted"])
+            pre_maes.append((report.get("baselines") or {}).get("pre_vote_mae", float("nan")))
+            briers.append(report["brier"])
         actual = load_measure(mid).ground_truth.yes_pct
         rows.append(SensitivityRow(
             measure_id=mid, actual_yes_pct=actual, seeds=seeds,

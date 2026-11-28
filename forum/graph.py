@@ -22,7 +22,7 @@ model output passes through redact_generated before other agents see it.
 
 from __future__ import annotations
 
-import json
+import math
 import random
 from datetime import datetime, timezone
 from typing import Any
@@ -30,7 +30,7 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 
 from forum.determinism import stable_hash
-from forum.llm import LLMClient
+from forum.llm import LLMClient, generate_json, json_bool
 from forum.prompts import (
     BRIEFING_CONTEXT,
     CITIZEN_DELIBERATE_PROMPT,
@@ -108,6 +108,30 @@ def _redaction_keys(measure: MeasureSpec) -> tuple[str | None, int | None]:
 
 # ---------- helpers ----------
 
+def _parse_vote(obj: dict) -> tuple[float, float, str]:
+    """A vote must carry a finite numeric stance; anything else is unusable.
+
+    The stance alone sets the yes-share (backtest.metrics.predicted_yes_share_weighted),
+    so it is never defaulted. Confidence is recorded but feeds no metric, so a
+    missing or malformed one falls back to 0.5.
+    """
+    stance = float(obj["stance"])
+    if not math.isfinite(stance):
+        raise ValueError(f"non-finite stance {stance!r}")
+    try:
+        confidence = float(obj.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    if not math.isfinite(confidence):
+        confidence = 0.5
+    return stance, confidence, str(obj.get("rationale", ""))[:600]
+
+
+def _parse_fact_check(obj: dict) -> tuple[bool, str | None]:
+    """The fact-checker must say flagged true/false; its note is optional."""
+    return json_bool(obj["flagged"]), str(obj.get("note") or "")[:300] or None
+
+
 def _vote_for_persona(
     llm: LLMClient,
     persona,
@@ -121,21 +145,15 @@ def _vote_for_persona(
     if transcript:
         system += "\n" + TRANSCRIPT_CONTEXT.format(transcript=transcript)
     number, _ = _redaction_keys(measure)
-    resp = llm.generate(
+    stance, confidence, rationale = generate_json(
+        llm,
         model=llm.citizen_model,
         system=system,
         user=VOTE_PROMPT.format(framing=redact_curated(measure.framing, number)),
-        json_mode=True,
         temperature=0.6,
         seed=seed + stable_hash(persona.persona_id, 100_000),
+        parse=_parse_vote,
     )
-    try:
-        obj = json.loads(resp.text)
-        stance = float(obj.get("stance", 0.5))
-        confidence = float(obj.get("confidence", 0.5))
-        rationale = str(obj.get("rationale", ""))[:600]
-    except (json.JSONDecodeError, ValueError, TypeError):
-        stance, confidence, rationale = 0.5, 0.3, "[unparseable response]"
     return Vote(
         persona_id=persona.persona_id,
         round=round_num,
@@ -228,20 +246,15 @@ def make_deliberate_node(llm: LLMClient):
             text = redact_generated(resp.text or "[empty]", number, year)
 
             # Critic fact-check against the curated briefing facts.
-            critic = llm.generate(
+            flagged, note = generate_json(
+                llm,
                 model=llm.critic_model,
                 system="You are a fact-checker. Be precise; do not flag normative disagreement.",
                 user=CRITIC_FACT_CHECK_PROMPT.format(statement=text, facts=facts),
-                json_mode=True,
                 temperature=0.0,
                 seed=seed,
+                parse=_parse_fact_check,
             )
-            try:
-                cobj = json.loads(critic.text)
-                flagged = bool(cobj.get("flagged"))
-                note = str(cobj.get("note", ""))[:300] or None
-            except (json.JSONDecodeError, ValueError, TypeError):
-                flagged, note = False, None
 
             statements.append(
                 Statement(

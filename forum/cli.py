@@ -13,6 +13,7 @@ All commands accept --stub to run without LLM calls (uses canned outputs).
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -37,7 +38,17 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 from backtest.measure_loader import list_measures
-from backtest.run import run_all, run_multigroup, run_one, run_sensitivity
+from backtest.run import (
+    RUNS_DIR,
+    ResumeError,
+    completed_rooms,
+    new_sensitivity_run_id,
+    run_all,
+    run_multigroup,
+    run_one,
+    run_sensitivity,
+)
+from forum.llm import LLMError
 from forum.refusal import RefusalError, check_request
 from personas.db import connect, get_source_versions
 
@@ -46,6 +57,15 @@ personas_app = typer.Typer(help="Persona library management.")
 app.add_typer(personas_app, name="personas")
 
 console = Console()
+
+
+@app.callback()
+def _progress_logging() -> None:
+    # Timestamped progress on stderr: rooms started/finished and retried calls,
+    # so a long live run shows whether it is working, slow, or retrying.
+    # httpx's one-line-per-request INFO logs stay off.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @personas_app.command("build")
@@ -181,14 +201,36 @@ def sensitivity(
     seeds: str = typer.Option("1,2,3,4,5", help="Comma-separated seed list"),
     stub: bool = typer.Option(False, help="Run without LLM calls"),
     provider: str = typer.Option("gemini", help="Model family: gemini | anthropic"),
+    resume: str = typer.Option(
+        None, help="Run id of an interrupted sweep to continue; its finished rooms are reused"
+    ),
 ) -> None:
     """Run a sensitivity sweep: each measure x each seed, with aggregate stats."""
     mids = None
     if measures:
         mids = [m if m.startswith("wa_") else f"wa_{m}" for m in measures]
     seed_list = [int(s.strip()) for s in seeds.split(",") if s.strip()]
-    rows = run_sensitivity(measure_ids=mids, n_personas=n, seeds=seed_list, stub=stub,
-                           provider=provider)
+    if resume:
+        if not (RUNS_DIR / resume).is_dir():
+            console.print(f"[red]No run directory {RUNS_DIR / resume}[/red]")
+            raise typer.Exit(code=2)
+        run_id = resume
+        wanted = {(m, s) for m in (mids or list_measures()) for s in seed_list}
+        done = len(wanted & completed_rooms(run_id).keys())
+        console.print(f"Resuming {run_id}: {done} of {len(wanted)} rooms already finished.")
+    else:
+        run_id = new_sensitivity_run_id(stub)
+        console.print(f"Run id {run_id}. If it stops, continue with --resume {run_id}")
+    try:
+        rows = run_sensitivity(measure_ids=mids, n_personas=n, seeds=seed_list, stub=stub,
+                               provider=provider, run_id=run_id)
+    except ResumeError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2) from e
+    except LLMError as e:
+        console.print(f"[red]Stopped:[/red] {e}")
+        console.print(f"Finished rooms are saved. Continue with --resume {run_id}")
+        raise typer.Exit(code=1) from e
     for r in rows:
         spread = r.max_predicted - r.min_predicted
         console.print(

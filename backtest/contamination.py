@@ -29,7 +29,7 @@ from typing import Iterable
 
 from backtest.measure_loader import LoadedMeasure, load_measure, list_measures
 from forum.budget import DEFAULT_DELIBERATION_BUDGET_USD, CostMeter
-from forum.llm import DEFAULT_CITIZEN_MODEL, LLMClient
+from forum.llm import LLMClient, generate_json, json_bool
 from forum.prompts import CONTAMINATION_PROBE_PROMPT, PROMPT_VERSION
 
 RUNS_DIR = Path("backtest/runs")
@@ -63,37 +63,42 @@ class ContaminationResult:
         return "LOW"
 
 
+def _parse_probe(obj: dict) -> tuple[bool, float | None, float, str]:
+    """"knows" must be a real boolean: an unreadable reply must never read as
+    "doesn't know", the reassuring answer for a contamination check."""
+    knows = json_bool(obj["knows"])
+    raw = obj.get("yes_pct")
+    yes_pct = float(raw) if raw is not None else None
+    conf = float(obj.get("confidence", 0.0))
+    return knows, yes_pct, conf, str(obj.get("note", ""))[:300]
+
+
 def probe_measure(
     llm: LLMClient,
     measure: LoadedMeasure,
     seed: int,
-    model: str = DEFAULT_CITIZEN_MODEL,
+    model: str | None = None,
 ) -> ContaminationResult:
-    """Probe the model's cold prior knowledge of one measure's outcome."""
+    """Probe the model's cold prior knowledge of one measure's outcome.
+
+    `model` defaults to the client's citizen model, i.e. the model whose
+    deliberations the probe is auditing (FORUM_GEMINI_MODEL if set).
+    """
     prompt = CONTAMINATION_PROBE_PROMPT.format(
         title=measure.spec.title,
         state=measure.state,
         year=measure.year,
         framing=measure.spec.framing,
     )
-    resp = llm.generate(
-        model=model,
+    knows, yes_pct, conf, note = generate_json(
+        llm,
+        model=model or llm.citizen_model,
         system="You are a factual-recall auditor.",
         user=prompt,
-        json_mode=True,
         temperature=0.0,
         seed=seed,
+        parse=_parse_probe,
     )
-    knows, yes_pct, conf, note = False, None, 0.0, ""
-    try:
-        obj = json.loads(resp.text)
-        knows = bool(obj.get("knows", False))
-        raw = obj.get("yes_pct", None)
-        yes_pct = float(raw) if raw is not None else None
-        conf = float(obj.get("confidence", 0.0))
-        note = str(obj.get("note", ""))[:300]
-    except (json.JSONDecodeError, ValueError, TypeError):
-        note = "[unparseable probe response]"
     return ContaminationResult(
         measure_id=measure.spec.measure_id,
         seed=seed,
@@ -109,7 +114,7 @@ def run_contamination_probe(
     measure_ids: Iterable[str] | None = None,
     seeds: Iterable[int] = (1,),
     stub: bool = False,
-    model: str = DEFAULT_CITIZEN_MODEL,
+    model: str | None = None,
     budget_usd: float = DEFAULT_DELIBERATION_BUDGET_USD,
 ) -> list[ContaminationResult]:
     """Probe each (measure, seed) and write a contamination report."""
@@ -120,6 +125,7 @@ def run_contamination_probe(
 
     meter = CostMeter(cap_usd=budget_usd)
     llm = LLMClient(meter=meter, stub=stub)
+    model = model or llm.citizen_model
 
     results: list[ContaminationResult] = []
     for mid in measure_ids:

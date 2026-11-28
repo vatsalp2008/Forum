@@ -3,7 +3,8 @@
 FORUM supports two model families so runs can be audited for cross-model
 robustness (methodology §5.6):
 
-- "gemini"    — Google Gemini via google-generativeai (the v0/v1 default)
+- "gemini"    — Google's Gemini API (Gemini and Gemma models) over plain HTTPS
+                (the v0/v1 default)
 - "anthropic" — Claude via the anthropic SDK (v2 cross-model family)
 
 Both providers share one interface: a `generate(...)` method, a `.meter`, a
@@ -16,14 +17,16 @@ without any API key.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from forum.budget import CostMeter
+from forum.budget import PRICING, CostMeter
 from forum.determinism import stable_hash
 
 # ---- Gemini defaults ----
@@ -32,6 +35,17 @@ from forum.determinism import stable_hash
 DEFAULT_CITIZEN_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_MODERATOR_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_CRITIC_MODEL = "gemini-2.5-flash-lite"
+
+# The Gemini API is called over plain HTTPS. The google-generativeai SDK is
+# end-of-life and predates "thinking" models: it can't see the `thought` flag on
+# a reply part, so it glued Gemma 4's private reasoning onto every answer.
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+DEFAULT_HTTP_TIMEOUT_S = 180.0   # thinking models are slow; override: FORUM_LLM_TIMEOUT_S
+
+# Set FORUM_GEMINI_MODEL to run every role on one other model, e.g. a free
+# Gemma model (`FORUM_GEMINI_MODEL=gemma-4-31b-it`). It must be priced in
+# forum/budget.py PRICING (0.0 is fine for free models).
+GEMINI_MODEL_ENV = "FORUM_GEMINI_MODEL"
 
 # Gemma models do not support the JSON-mode mime type that Gemini does.
 JSON_MODE_SUPPORTED_MODELS = {
@@ -49,6 +63,8 @@ ANTHROPIC_MAX_TOKENS = 4096
 
 PROVIDER_GEMINI = "gemini"
 PROVIDER_ANTHROPIC = "anthropic"
+
+log = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
@@ -87,6 +103,87 @@ def strip_code_fences(text: str) -> str:
     return s.strip()
 
 
+def extract_json_object(text: str) -> dict | None:
+    """Parse a model reply as one JSON object, or return None.
+
+    Tolerates markdown fences and prose around the object: models without a
+    native JSON mode (Gemma) often add both. Anything that is not a JSON
+    object (a list, a bare number, malformed text) returns None.
+    """
+    s = strip_code_fences(text or "")
+    candidates = [s]
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(s[start:end + 1])
+    for candidate in candidates:
+        try:
+            obj = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def json_bool(value: Any) -> bool:
+    """Strict boolean from a JSON reply: true/false (or "true"/"false") only.
+
+    bool("false") is True, so a plain bool() cast would silently invert a
+    model that quotes its booleans.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"expected a boolean, got {value!r}")
+
+
+JSON_ATTEMPTS = 2
+
+
+def generate_json(
+    llm: Any,
+    *,
+    model: str,
+    system: str,
+    user: str,
+    temperature: float = 0.7,
+    seed: int | None = None,
+    parse: Callable[[dict], Any] | None = None,
+) -> Any:
+    """Ask for a JSON object; ask once more if the reply is unusable; then fail.
+
+    A reply is unusable if it holds no JSON object, or if `parse(obj)` raises
+    KeyError/ValueError/TypeError (e.g. a vote without a numeric stance).
+    Returns `parse(obj)`, or the object itself when no parser is given.
+
+    Never substitutes a default: a neutral 0.5 vote or a "not flagged" fact
+    check would put fabricated data into a live run, so the second unusable
+    reply raises LLMError and the run aborts (like any other failed call).
+    """
+    text = ""
+    for attempt in range(JSON_ATTEMPTS):
+        resp = llm.generate(
+            model=model,
+            system=system,
+            user=user,
+            json_mode=True,
+            temperature=temperature,
+            seed=None if seed is None else seed + attempt,
+        )
+        text = resp.text
+        obj = extract_json_object(text)
+        if obj is None:
+            continue
+        try:
+            return parse(obj) if parse is not None else obj
+        except (KeyError, ValueError, TypeError):
+            continue
+    raise LLMError(
+        f"unusable JSON reply from {model!r} after {JSON_ATTEMPTS} attempts: {text[:200]!r}"
+    )
+
+
 # Free-tier defaults. Requests-per-minute limits are low, so we space live
 # calls out and back off generously on 429/503/504. Override via env for
 # paid tiers: FORUM_LLM_MIN_INTERVAL_S, FORUM_LLM_MAX_RETRIES.
@@ -95,9 +192,57 @@ DEFAULT_MAX_RETRIES = 5
 
 
 def _retry_delay_seconds(err: Exception) -> float | None:
-    """Extract a server-suggested retry delay (e.g. 'retry_delay { seconds: 2 }')."""
-    m = re.search(r"seconds:\s*(\d+)", str(err))
-    return float(m.group(1)) if m else None
+    """Extract a server-suggested retry delay: 'retry_delay { seconds: 2 }'
+    (gRPC text) or '"retryDelay": "2s"' (REST JSON)."""
+    m = re.search(r'seconds:\s*(\d+)|"retryDelay":\s*"(\d+)', str(err))
+    if m is None:
+        return None
+    return float(m.group(1) or m.group(2))
+
+
+class GeminiHTTPError(RuntimeError):
+    """A non-200 reply from the Gemini API.
+
+    `status_code` drives _is_retryable. The body stays in the message so a
+    suggested retry delay, and quota details such as the daily limit, survive
+    into the logs and the final LLMError.
+    """
+
+    def __init__(self, status_code: int, body: str) -> None:
+        super().__init__(f"HTTP {status_code}: {body[:2000]}")
+        self.status_code = status_code
+
+
+class UnusableReplyError(RuntimeError):
+    """A 200 reply with no usable answer: blocked, cut off, or empty.
+
+    It carries no status code, so the retry loop treats it as transient.
+    """
+
+
+def gemini_answer_text(payload: dict) -> str:
+    """The answer in a generateContent reply, without the model's thinking.
+
+    Thinking models (Gemma 4) return their reasoning as parts marked
+    "thought": true, ahead of the answer. That reasoning must never become a
+    vote, a statement, or a line in the transcript other personas read.
+    """
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        raise UnusableReplyError(f"no candidates; promptFeedback={payload.get('promptFeedback')}")
+    candidate = candidates[0]
+    finish = candidate.get("finishReason", "STOP")
+    parts = (candidate.get("content") or {}).get("parts") or []
+    text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+    if finish != "STOP" or not text:
+        raise UnusableReplyError(f"finishReason={finish}, answer length {len(text)}")
+    return text
+
+
+def _short_error(err: Exception) -> str:
+    """One-line description of a failed call for progress logs."""
+    status = getattr(err, "status_code", None)
+    return f"HTTP {status}" if isinstance(status, int) else type(err).__name__
 
 
 def _is_retryable(err: Exception) -> bool:
@@ -136,6 +281,14 @@ class _LLMBase:
         self.citizen_model = citizen_model
         self.moderator_model = moderator_model
         self.critic_model = critic_model
+        # Fail before any call on a model the cost meter can't price (e.g. a
+        # typo in FORUM_GEMINI_MODEL), rather than after the first one.
+        unknown = sorted({citizen_model, moderator_model, critic_model} - PRICING.keys())
+        if unknown:
+            raise ValueError(
+                f"Unknown model(s) {unknown}: add them to forum/budget.py PRICING "
+                "(0.0 for free models)."
+            )
         self.min_interval_s = (
             min_interval_s if min_interval_s is not None
             else float(os.environ.get("FORUM_LLM_MIN_INTERVAL_S", DEFAULT_MIN_CALL_INTERVAL_S))
@@ -201,7 +354,10 @@ class _LLMBase:
                 # Honor a server-suggested retry delay (rate limits carry one);
                 # otherwise exponential backoff. Free-tier limits need seconds.
                 suggested = _retry_delay_seconds(e)
-                time.sleep(suggested if suggested is not None else 2.0 * (2 ** attempt))
+                delay = suggested if suggested is not None else 2.0 * (2 ** attempt)
+                log.warning("%s call failed (%s); retry %d of %d in %.0fs", model,
+                            _short_error(e), attempt + 1, self.max_retries - 1, delay)
+                time.sleep(delay)
         if last_err is not None:
             # Live mode aborts loudly rather than fabricating data (stub=True
             # is the only path that returns canned output).
@@ -221,6 +377,12 @@ class LLMClient(_LLMBase):
     provider = PROVIDER_GEMINI
 
     def __init__(self, meter: CostMeter, stub: bool = False, api_key: str | None = None, **kw):
+        # Read at construction, not import, so .env and test overrides apply.
+        # Explicit per-role kwargs still win.
+        override = os.environ.get(GEMINI_MODEL_ENV)
+        if override:
+            for role in ("citizen_model", "moderator_model", "critic_model"):
+                kw.setdefault(role, override)
         super().__init__(meter, stub=stub, api_key=api_key or os.environ.get("GEMINI_API_KEY"), **kw)
 
     def _init_client(self) -> None:
@@ -229,20 +391,34 @@ class LLMClient(_LLMBase):
                 "GEMINI_API_KEY not set and stub=False. "
                 "Either set GEMINI_API_KEY or pass stub=True."
             )
-        import google.generativeai as genai  # type: ignore
+        import httpx
 
-        genai.configure(api_key=self._api_key)
-        self._client = genai
+        timeout = float(os.environ.get("FORUM_LLM_TIMEOUT_S", DEFAULT_HTTP_TIMEOUT_S))
+        # The key travels in a header, never in the URL (URLs end up in logs).
+        self._client = httpx.Client(timeout=timeout, headers={"x-goog-api-key": self._api_key})
 
     def _raw_generate(self, model, system, user, json_mode, temperature):
         full_prompt = system + "\n\n" + user
-        m = self._client.GenerativeModel(model)
-        kwargs: dict[str, Any] = {"temperature": temperature}
+        config: dict[str, Any] = {"temperature": temperature}
         if json_mode and model in JSON_MODE_SUPPORTED_MODELS:
-            kwargs["response_mime_type"] = "application/json"
-        resp = m.generate_content(full_prompt, generation_config=kwargs)
-        text = (resp.text or "").strip()
-        return text, _approx_tokens(full_prompt), _approx_tokens(text)
+            config["responseMimeType"] = "application/json"
+        resp = self._client.post(
+            GEMINI_API_URL.format(model=model),
+            json={
+                "contents": [{"role": "user", "parts": [{"text": full_prompt}]}],
+                "generationConfig": config,
+            },
+        )
+        if resp.status_code != 200:
+            raise GeminiHTTPError(resp.status_code, resp.text)
+        payload = resp.json()
+        text = gemini_answer_text(payload)
+        usage = payload.get("usageMetadata") or {}
+        in_tok = usage.get("promptTokenCount") or _approx_tokens(full_prompt)
+        # Thinking tokens are billed as output tokens.
+        out_tok = (usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
+                   or _approx_tokens(text))
+        return text, in_tok, out_tok
 
 
 class AnthropicLLMClient(_LLMBase):

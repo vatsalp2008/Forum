@@ -58,10 +58,20 @@ is stamped `Mode: STUB` or `Mode: LIVE` so stub output is never mistaken for a
 real result.
 
 **Live runs and quota.** Live mode calls the model API and fails loudly on
-errors rather than fabricating data — set `stub=True` for offline runs. Google's
-free tier caps requests per day (as low as ~20/day for some models), which is
-below a single full deliberation; a real backtest sweep needs a billed key.
-Tune pacing with `FORUM_LLM_MIN_INTERVAL_S` and `FORUM_LLM_MAX_RETRIES`.
+errors rather than fabricating data — set `stub=True` for offline runs. That
+includes replies the model garbles: an unreadable vote or fact check is asked
+for once more, then stops the run. It is never replaced by a neutral default.
+Google's free tier caps requests per day (as low as ~20/day for some models),
+which is below a single full deliberation (65 calls for 12 personas).
+
+- **Choose the model:** `FORUM_GEMINI_MODEL=gemma-4-31b-it` runs every role on
+  that model. For example, Gemma 4 is free on the same key. It must be listed in
+  `forum/budget.py` PRICING, and reports are stamped with it.
+- **Resume a sweep:** `forum sensitivity` prints its run id. If a sweep stops
+  (daily cap, timeouts), `forum sensitivity --resume <run_id>` reuses every
+  finished room and runs only the rest. Use the same model and `--n` as before;
+  FORUM refuses to mix rooms from different setups.
+- **Pacing:** tune with `FORUM_LLM_MIN_INTERVAL_S` and `FORUM_LLM_MAX_RETRIES`.
 
 **Cross-model robustness (v2).** Runs can use a second model family for the
 cross-model audit in [docs/methodology.md](docs/methodology.md) §5.6:

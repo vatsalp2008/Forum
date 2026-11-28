@@ -6,6 +6,7 @@ LLMError; only an explicit stub client returns canned data. We also check
 that reports self-identify their mode.
 """
 
+import httpx
 import pytest
 
 from backtest.run import run_one
@@ -13,18 +14,15 @@ from forum.budget import CostMeter
 from forum.llm import LLMClient, LLMError
 
 
-class _BoomModel:
-    def generate_content(self, *args, **kwargs):
-        raise RuntimeError("simulated quota exhaustion")
-
-
 def _live_client_that_fails() -> LLMClient:
     meter = CostMeter(cap_usd=1.0)
     # No throttling / minimal retries so the test is fast.
     llm = LLMClient(meter=meter, stub=False, api_key="fake-key",
                     min_interval_s=0.0, max_retries=2)
-    # Replace the google-generativeai client with one that always errors.
-    llm._client = type("_G", (), {"GenerativeModel": lambda self, m: _BoomModel()})()
+    # Every request fails, as when the daily quota is exhausted.
+    llm._client = httpx.Client(transport=httpx.MockTransport(
+        lambda request: httpx.Response(429, json={"error": {"status": "RESOURCE_EXHAUSTED"}})
+    ))
     return llm
 
 
