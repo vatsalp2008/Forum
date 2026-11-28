@@ -54,7 +54,10 @@ def personas_build(
     national: bool = typer.Option(False, help="Load all 50 states + DC from psam_pus[a-d].csv"),
     skip_acs: bool = typer.Option(False, help="Skip ACS load (priors only)"),
     skip_anes: bool = typer.Option(False, help="Skip ANES load (skeleton only)"),
-    cces: bool = typer.Option(False, help="Also load CCES 2018 priors (blended with ANES)"),
+    cces: bool = typer.Option(
+        False, help="Also load CCES 2018: priors, validated turnout, state party targets "
+                    "(needed for likely-voter backtests)"
+    ),
 ) -> None:
     """Load ACS PUMS and ANES (optionally CCES) into the persona library."""
     con = connect()
@@ -74,7 +77,10 @@ def personas_build(
     if cces:
         from personas.cces_loader import load_cces
         nc = load_cces(con)
-        console.print(f"[green]CCES:[/green] loaded {nc} prior cells (blended with ANES)")
+        console.print(
+            f"[green]CCES:[/green] loaded {nc['priors']} prior cells (blended with ANES), "
+            f"{nc['turnout']} turnout cells, {nc['party_targets']} state party targets"
+        )
 
 
 @personas_app.command("info")
@@ -96,6 +102,9 @@ def personas_sample(
     state: str = typer.Option("US", help="Two-letter state, or 'US' for a national sample"),
     n: int = typer.Option(12, help="Number of personas"),
     seed: int = typer.Option(42),
+    likely_voters: bool = typer.Option(
+        False, help="Weight by validated turnout (CCES) to preview the electorate"
+    ),
 ) -> None:
     """Preview a population sample (state or national) as a demographic summary."""
     from collections import Counter
@@ -109,8 +118,9 @@ def personas_sample(
         console.print("[yellow]No sources loaded. Run `forum personas build`.[/yellow]")
         raise typer.Exit(code=1)
     spec = PopulationSpec(
-        name=f"{state}-adult-citizens", state=state, n=n, seed=seed,
-        source_versions=versions,
+        name=f"{state}-{'likely-voters' if likely_voters else 'adult-citizens'}",
+        state=state, n=n, seed=seed, source_versions=versions,
+        likely_voters=likely_voters,
     )
     personas = sample_personas(con, spec)
     by_state = Counter(p.demographics.state for p in personas)

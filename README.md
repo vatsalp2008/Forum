@@ -7,7 +7,7 @@ FORUM simulates structured deliberation among demographically grounded synthetic
 ## What FORUM is
 
 A multi-agent LLM system that:
-- Samples synthetic personas from joint distributions of public demographic microdata (ACS PUMS) and conditions issue-position priors on published survey microdata (ANES).
+- Samples synthetic personas from joint distributions of public demographic microdata (ACS PUMS): adult citizens, weighted toward likely voters with validated turnout (CCES), with party ID calibrated to each state and issue-position priors from published survey microdata (ANES + CCES).
 - Runs a deliberative-polling protocol (Fishkin) over those personas: information presentation → small-group deliberation → opinion measurement.
 - Produces a deliberation transcript, a weighted opinion-change report, and a per-segment outcome breakdown.
 - Backtests its predictions against resolved ballot measures and reports calibration error.
@@ -32,7 +32,7 @@ v0, in development. Solo-maintained. Free-tier-only stack.
 # Requires Python 3.11+
 uv sync                                 # install dependencies
 echo "GEMINI_API_KEY=..." > .env        # default model: gemini-2.5-flash-lite
-forum personas build --state WA        # build persona library (needs ACS+ANES data)
+forum personas build --state WA --cces # build persona library (needs ACS+ANES+CCES data)
 forum deliberate i1631                 # run a single deliberation
 forum backtest                          # run all measures, emit per-measure reports
 forum sensitivity --n 12 --seeds 1,2,3,4,5
@@ -42,10 +42,14 @@ forum refusal-check "predict the next election"
                                         # test the input-side refusal layer
 ```
 
-**Population scope.** Personas are sampled per-state by default; load ACS for
-multiple states and sample nationally (population-weighted) with
-`forum personas sample --state US`. The v0 measure set is WA-only, so national
-sampling matters once national measures are added.
+**Population scope.** Personas are adult citizens, sampled per-state by
+default. Backtests weight them toward likely voters, using CCES 2018 validated
+turnout, and calibrate party ID to the state's own partisan balance, so `--cces`
+is required for backtests. Preview a population with
+`forum personas sample --state WA --likely-voters`. Load ACS nationally
+(`personas build --national --cces`) to sample across states with `--state US`.
+The v0 measure set is WA-only, so national sampling matters once national
+measures are added.
 
 A single deliberation in stub mode (no API key needed) is the fastest way to
 verify everything works: `forum deliberate i1631 --stub`. The full pipeline

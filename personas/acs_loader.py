@@ -37,8 +37,23 @@ FIPS_TO_USPS = {
 # (psam_p<FIPS>.csv, e.g. WA -> psam_p53.csv, CA -> psam_p06.csv).
 STATE_FIPS = {usps: f"{fips:02d}" for fips, usps in FIPS_TO_USPS.items()}
 
-# ACS PUMS person columns FORUM reads.
-_PUMS_COLS = ["ST", "PUMA10", "PUMA20", "AGEP", "SEX", "RAC1P", "HISP", "SCHL", "PINCP", "PWGTP"]
+# ACS PUMS person columns FORUM reads. CIT: 1-4 citizen, 5 not a citizen.
+_PUMS_COLS = ["ST", "PUMA10", "PUMA20", "AGEP", "SEX", "RAC1P", "HISP", "SCHL", "PINCP",
+              "PWGTP", "CIT"]
+
+# acs_skeleton columns, named explicitly on insert so column order can never
+# silently mis-assign values (older libraries gained `citizen` via ALTER).
+_SKELETON_COLS = ["state", "puma", "age_band", "sex", "race_eth", "education",
+                  "income_band", "person_weight", "record_count", "citizen"]
+_CELL_KEYS = ["state", "puma", "age_band", "sex", "race_eth", "education",
+              "income_band", "citizen"]
+
+
+def _insert_cells(con: duckdb.DuckDBPyConnection, cells: pd.DataFrame) -> None:
+    con.register("cells_df", cells)
+    cols = ", ".join(_SKELETON_COLS)
+    con.execute(f"INSERT INTO acs_skeleton ({cols}) SELECT {cols} FROM cells_df")
+    con.unregister("cells_df")
 
 
 # ---------- Re-coding ACS variables into the FORUM coarsened schema ----------
@@ -125,9 +140,8 @@ def load_state(con: duckdb.DuckDBPyConnection, state: str = "WA") -> int:
             f"and place there. See personas/acs_loader.py docstring."
         )
 
-    cols = ["ST", "PUMA10", "PUMA20", "AGEP", "SEX", "RAC1P", "HISP", "SCHL", "PINCP", "PWGTP"]
-    df = pd.read_csv(csv_path, usecols=cols, low_memory=False)
-    df = df.dropna(subset=["AGEP", "SEX", "RAC1P", "SCHL"])
+    df = pd.read_csv(csv_path, usecols=_PUMS_COLS, low_memory=False)
+    df = df.dropna(subset=["AGEP", "SEX", "RAC1P", "SCHL", "CIT"])
 
     df["age_band"] = df["AGEP"].astype(int).apply(_agep_to_band)
     df = df[df["age_band"].notna()].copy()  # drop minors
@@ -138,25 +152,18 @@ def load_state(con: duckdb.DuckDBPyConnection, state: str = "WA") -> int:
     )
     df["education"] = df["SCHL"].fillna(0).astype(int).apply(_schl_to_education)
     df["income_band"] = df["PINCP"].fillna(0).astype(float).apply(_pincp_to_income_band)
+    df["citizen"] = df["CIT"].astype(int) != 5
     df["state"] = state
     df["puma"] = df.apply(_coalesce_puma, axis=1)
     df = df[df["puma"].notna()].copy()
 
     grouped = (
-        df.groupby(
-            [
-                "state", "puma", "age_band", "sex", "race_eth",
-                "education", "income_band",
-            ],
-            as_index=False,
-        )
+        df.groupby(_CELL_KEYS, as_index=False)
         .agg(person_weight=("PWGTP", "sum"), record_count=("PWGTP", "count"))
     )
 
     con.execute("DELETE FROM acs_skeleton WHERE state = ?", [state])
-    con.register("grouped_df", grouped)
-    con.execute("INSERT INTO acs_skeleton SELECT * FROM grouped_df")
-    con.unregister("grouped_df")
+    _insert_cells(con, grouped)
 
     record_source_version(con, "acs", ACS_VERSION)
     return len(grouped)
@@ -178,6 +185,7 @@ def _recode_vectorized(df: pd.DataFrame) -> pd.DataFrame:
 
     p20 = pd.to_numeric(df["PUMA20"], errors="coerce")
     p10 = pd.to_numeric(df["PUMA10"], errors="coerce")
+    cit = pd.to_numeric(df["CIT"], errors="coerce")
     p20_ok = p20.notna() & (p20 != -9) & (p20 != 0)
     p10_ok = p10.notna() & (p10 != -9) & (p10 != 0)
     puma_num = p20.where(p20_ok, p10.where(p10_ok))
@@ -203,9 +211,11 @@ def _recode_vectorized(df: pd.DataFrame) -> pd.DataFrame:
             ["lt_25k", "25_50k", "50_75k", "75_125k"], default="125k_plus",
         ),
         "PWGTP": df["PWGTP"].to_numpy(),
+        "citizen": (cit != 5).where(cit.notna()),   # NaN when CIT is missing
     })
-    out = out.dropna(subset=["state", "puma", "age_band"])
+    out = out.dropna(subset=["state", "puma", "age_band", "citizen"])
     out["puma"] = out["puma"].astype("int64").astype(str).str.zfill(5)
+    out["citizen"] = out["citizen"].astype(bool)
     return out
 
 
@@ -233,7 +243,7 @@ def load_national(con: duckdb.DuckDBPyConnection, chunksize: int = 2_000_000) ->
             f"and unzip into personas/data/raw/acs/csv_pus/."
         )
 
-    keys = ["state", "puma", "age_band", "sex", "race_eth", "education", "income_band"]
+    keys = _CELL_KEYS
     partials: list[pd.DataFrame] = []
     for path in files:
         for chunk in pd.read_csv(path, usecols=_PUMS_COLS, chunksize=chunksize):
@@ -251,9 +261,7 @@ def load_national(con: duckdb.DuckDBPyConnection, chunksize: int = 2_000_000) ->
     )
 
     con.execute("DELETE FROM acs_skeleton")
-    con.register("national_df", combined)
-    con.execute("INSERT INTO acs_skeleton SELECT * FROM national_df")
-    con.unregister("national_df")
+    _insert_cells(con, combined)
 
     record_source_version(con, "acs", ACS_VERSION)
     return len(combined)

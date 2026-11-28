@@ -7,10 +7,18 @@ Acquisition:
     personas/data/raw/cces/CCES18_Common_OUTPUT_vv_topost.dta (or .csv).
     The .csv is preferred here (much smaller); only the needed columns are read.
 
-Like anes_loader, this produces aggregated cross-tab priors stored in the
+Like anes_loader, this produces aggregated cross-tab tables stored in the
 persona library; raw microdata is never shipped or queryable through FORUM.
-Priors land in the `cces_priors` table and are blended with `anes_priors` at
-sample time (cell-N weighted; see personas/sample.py).
+Three tables are built:
+
+- `cces_priors` — issue priors, blended with `anes_priors` at sample time
+  (cell-N weighted; see personas/sample.py).
+- `turnout_propensity` — P(voted | age x education x race) among adult
+  citizens, from the 2018 *validated* vote (voter-file match). Weights the
+  sampling pool toward the electorate rather than all adults.
+- `party_state_targets` — each state's party-ID shares among adult citizens
+  (survey-weighted). The sampler calibrates the national P(party | demo) to
+  these so a state's persona pool has that state's partisan balance.
 
 IMPORTANT — verify the variable map below against the CCES 2018 Guide before
 trusting a build. Variable names/codings differ across CCES years. This loader
@@ -41,6 +49,16 @@ CCES_VERSION = "2018_cc"
 #   CC18_320a  Background checks for all gun sales:      1 For, 2 Against   (guns)
 #   CC18_414B  Ballot measure: increase taxes on incomes over $1M by 4% for
 #              schools/roads: 1 For, 2 Against                             (tax on rich)
+#   race       White, Black, Hispanic, Asian, Native American, Mixed, Other,
+#              Middle Eastern
+#   hispanic   Hispanic origin (asked of non-Hispanic-race respondents): Yes/No
+#   cit1       U.S. citizen: Yes/No
+#   inputstate state of residence (full state name)
+#   commonweight  survey weight (all respondents)
+#   CL_2018gvm validated 2018 general-election vote method (polling, mail,
+#              earlyVote, absentee, unknown); blank = no record of voting
+#              (unmatched respondents count as non-voters, the standard
+#              validated-turnout convention)
 PARTY_ID_VAR = "pid7"
 EDUCATION_VAR = "educ"
 BIRTHYEAR_VAR = "birthyr"
@@ -48,7 +66,20 @@ IDEOLOGY_VAR = "ideo5"
 CLIMATE_VAR = "CC18_415a"
 GUNS_VAR = "CC18_320a"
 TAXES_VAR = "CC18_414B"
+RACE_VAR = "race"
+HISPANIC_VAR = "hispanic"
+CITIZEN_VAR = "cit1"
+STATE_VAR = "inputstate"
+WEIGHT_VAR = "commonweight"
+VOTED_2018_VAR = "CL_2018gvm"
 SURVEY_YEAR = 2018
+
+# Minimum respondents for a directly estimated turnout cell (else back off to
+# the age x education marginal), and for a state's party target to be used.
+TURNOUT_CELL_MIN = 15
+PARTY_TARGET_MIN = 100
+
+ALL_RACES = ("white_nh", "black_nh", "hispanic", "asian_nh", "other_nh")
 
 
 # The CCES CSV stores text value labels (not numeric codes). We read labels
@@ -66,6 +97,29 @@ _EDUCATION_LABELS = {
 _IDEOLOGY_SCORES = {
     "Very liberal": -1.0, "Liberal": -0.5, "Moderate": 0.0,
     "Conservative": 0.5, "Very conservative": 1.0,
+}
+# Mirrors the ACS recode: any Hispanic origin -> hispanic; Middle Eastern ->
+# white_nh because the Census (whose RAC1P the ACS skeleton uses) classifies
+# MENA respondents as White.
+_RACE_LABELS = {
+    "White": "white_nh", "Black": "black_nh", "Asian": "asian_nh",
+    "Middle Eastern": "white_nh",
+    "Mixed": "other_nh", "Other": "other_nh", "Native American": "other_nh",
+}
+_STATE_NAME_TO_USPS = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
+    "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
+    "District of Columbia": "DC", "Florida": "FL", "Georgia": "GA", "Hawaii": "HI",
+    "Idaho": "ID", "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD",
+    "Massachusetts": "MA", "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS",
+    "Missouri": "MO", "Montana": "MT", "Nebraska": "NE", "Nevada": "NV",
+    "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM", "New York": "NY",
+    "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI",
+    "South Carolina": "SC", "South Dakota": "SD", "Tennessee": "TN", "Texas": "TX",
+    "Utah": "UT", "Vermont": "VT", "Virginia": "VA", "Washington": "WA",
+    "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY",
 }
 _SUPPORT_LABELS = {"Support", "For"}
 _OPPOSE_LABELS = {"Oppose", "Against"}
@@ -92,6 +146,75 @@ def _age_collapse_from_birthyear(v: float) -> str | None:
     if age <= 64:
         return "45-64"
     return "65+"
+
+
+def _race_collapse(race, hispanic) -> str | None:
+    if race == "Hispanic" or hispanic == "Yes":
+        return "hispanic"
+    return _RACE_LABELS.get(race)
+
+
+def _voted(series: pd.Series) -> pd.Series:
+    """Validated-vote indicator: any recorded vote method counts as voting."""
+    return series.notna() & (series.astype(str).str.strip() != "")
+
+
+def _weighted_mean(values: pd.Series, weights: pd.Series) -> float:
+    total = float(weights.sum())
+    if total <= 0:
+        return float(values.mean())
+    return float((values * weights).sum() / total)
+
+
+def _turnout_table(df: pd.DataFrame) -> pd.DataFrame:
+    """P(voted | age x education x race) among adult citizens (weighted).
+
+    Expects recoded columns age_band, education, race_eth, citizen, voted and
+    the weight column. Race cells with fewer than TURNOUT_CELL_MIN respondents
+    back off to their (age x education) marginal, as party ID does in ANES.
+    """
+    d = df[df["citizen"]].dropna(subset=["age_band", "education", "race_eth"])
+    w = d[WEIGHT_VAR].astype(float)
+    v = d["voted"].astype(float)
+    marginals = {
+        key: _weighted_mean(v[grp.index], w[grp.index])
+        for key, grp in d.groupby(["age_band", "education"])
+        if len(grp) >= TURNOUT_CELL_MIN
+    }
+    cells = {
+        key: (_weighted_mean(v[grp.index], w[grp.index]), len(grp))
+        for key, grp in d.groupby(["age_band", "education", "race_eth"])
+    }
+    rows: list[dict] = []
+    for (age, edu), marginal in marginals.items():
+        for race in ALL_RACES:
+            cell = cells.get((age, edu, race))
+            if cell is not None and cell[1] >= TURNOUT_CELL_MIN:
+                p_vote, n = cell
+            else:
+                p_vote, n = marginal, (cell[1] if cell is not None else 0)
+            rows.append({"age_band": age, "education": edu, "race_eth": race,
+                         "p_vote": p_vote, "cell_n": int(n)})
+    return pd.DataFrame(rows, columns=["age_band", "education", "race_eth", "p_vote", "cell_n"])
+
+
+def _party_targets(df: pd.DataFrame) -> pd.DataFrame:
+    """Weighted party-ID shares among each state's adult citizens.
+
+    States with fewer than PARTY_TARGET_MIN respondents are omitted (their
+    personas keep the uncalibrated national party distribution).
+    """
+    d = df[df["citizen"]].dropna(subset=["party_id", "state"])
+    rows: list[dict] = []
+    for state, grp in d.groupby("state"):
+        if len(grp) < PARTY_TARGET_MIN:
+            continue
+        w = grp[WEIGHT_VAR].astype(float)
+        total = float(w.sum())
+        shares = {k: float(w[grp["party_id"] == k].sum() / total) for k in ("dem", "ind", "rep")}
+        rows.append({"state": state, "p_dem": shares["dem"], "p_ind": shares["ind"],
+                     "p_rep": shares["rep"], "n_respondents": int(len(grp))})
+    return pd.DataFrame(rows, columns=["state", "p_dem", "p_ind", "p_rep", "n_respondents"])
 
 
 def _support_share(series: pd.Series) -> float:
@@ -124,10 +247,14 @@ def _read_cces(usecols: list[str] | None = None) -> pd.DataFrame:
     )
 
 
-def load_cces(con: duckdb.DuckDBPyConnection) -> int:
-    """Load CCES priors into cces_priors. Returns n_prior_cells."""
+def load_cces(con: duckdb.DuckDBPyConnection) -> dict[str, int]:
+    """Load CCES into cces_priors, turnout_propensity and party_state_targets.
+
+    Returns the number of rows written to each table.
+    """
     required = [PARTY_ID_VAR, EDUCATION_VAR, BIRTHYEAR_VAR, IDEOLOGY_VAR,
-                CLIMATE_VAR, GUNS_VAR, TAXES_VAR]
+                CLIMATE_VAR, GUNS_VAR, TAXES_VAR, RACE_VAR, HISPANIC_VAR,
+                CITIZEN_VAR, STATE_VAR, WEIGHT_VAR, VOTED_2018_VAR]
     try:
         df = _read_cces(usecols=required)
     except ValueError as e:
@@ -150,9 +277,18 @@ def load_cces(con: duckdb.DuckDBPyConnection) -> int:
     # label-based recodes below.
     df[BIRTHYEAR_VAR] = pd.to_numeric(df[BIRTHYEAR_VAR], errors="coerce")
 
+    df[WEIGHT_VAR] = pd.to_numeric(df[WEIGHT_VAR], errors="coerce").fillna(0.0)
+
     df["party_id"] = df[PARTY_ID_VAR].apply(_party_id_collapse)
     df["education"] = df[EDUCATION_VAR].apply(_education_collapse)
     df["age_band"] = df[BIRTHYEAR_VAR].apply(_age_collapse_from_birthyear)
+    df["race_eth"] = [_race_collapse(r, h) for r, h in zip(df[RACE_VAR], df[HISPANIC_VAR], strict=True)]
+    df["citizen"] = df[CITIZEN_VAR] == "Yes"
+    df["state"] = df[STATE_VAR].map(_STATE_NAME_TO_USPS)
+    df["voted"] = _voted(df[VOTED_2018_VAR])
+
+    turnout_df = _turnout_table(df)
+    targets_df = _party_targets(df)
     df = df.dropna(subset=["party_id", "education", "age_band"])
 
     rows: list[dict] = []
@@ -171,11 +307,19 @@ def load_cces(con: duckdb.DuckDBPyConnection) -> int:
         })
     priors_df = pd.DataFrame(rows)
 
-    con.execute("DELETE FROM cces_priors")
-    if len(priors_df):
-        con.register("cces_df", priors_df)
-        con.execute("INSERT INTO cces_priors SELECT * FROM cces_df")
-        con.unregister("cces_df")
+    _replace_table(con, "cces_priors", priors_df)
+    _replace_table(con, "turnout_propensity", turnout_df)
+    _replace_table(con, "party_state_targets", targets_df)
 
     record_source_version(con, "cces", CCES_VERSION)
-    return len(priors_df)
+    return {"priors": len(priors_df), "turnout": len(turnout_df),
+            "party_targets": len(targets_df)}
+
+
+def _replace_table(con: duckdb.DuckDBPyConnection, table: str, frame: pd.DataFrame) -> None:
+    con.execute(f"DELETE FROM {table}")
+    if len(frame):
+        con.register("cces_df", frame)
+        cols = ", ".join(frame.columns)
+        con.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM cces_df")
+        con.unregister("cces_df")

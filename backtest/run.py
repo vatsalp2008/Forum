@@ -64,7 +64,7 @@ def run_one(
     if not source_versions and not stub:
         raise RuntimeError(
             "Persona library has no loaded sources. "
-            "Run `forum personas build --state WA` first, or use --stub."
+            "Run `forum personas build --state WA --cces` first, or use --stub."
         )
 
     if stub and not source_versions:
@@ -73,11 +73,12 @@ def run_one(
         personas = _stub_personas(n_personas, state=measure.state, seed=seed)
     else:
         spec = PopulationSpec(
-            name=f"{measure.state}-adult-citizens",
+            name=f"{measure.state}-likely-voters",
             state=measure.state,
             n=n_personas,
             seed=seed,
             source_versions=source_versions,
+            likely_voters=True,   # ballot outcomes are decided by voters, not all adults
         )
         personas = sample_personas(con, spec)
 
@@ -178,7 +179,7 @@ def run_multigroup(
     if not source_versions and not stub:
         raise RuntimeError(
             "Persona library has no loaded sources. "
-            "Run `forum personas build --state WA` first, or use --stub."
+            "Run `forum personas build --state WA --cces` first, or use --stub."
         )
 
     meter = CostMeter(cap_usd=budget_usd)
@@ -195,11 +196,12 @@ def run_multigroup(
             personas = _stub_personas(group_size, state=measure.state, seed=gseed)
         else:
             spec = PopulationSpec(
-                name=f"{measure.state}-adult-citizens",
+                name=f"{measure.state}-likely-voters",
                 state=measure.state,
                 n=group_size,
                 seed=gseed,
                 source_versions=source_versions,
+                likely_voters=True,
             )
             personas = sample_personas(con, spec)
         final_state = run_deliberation(llm, measure.spec, personas, seed=gseed)

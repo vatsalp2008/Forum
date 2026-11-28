@@ -9,8 +9,9 @@ from personas.schema import PopulationSpec
 
 def _seed_cell(con, state, puma, weight, count=50, age="30-44"):
     con.execute(
-        "INSERT INTO acs_skeleton VALUES (?,?,?,?,?,?,?,?,?)",
-        [state, puma, age, "female", "white_nh", "bachelors", "50_75k", weight, count],
+        "INSERT INTO acs_skeleton (state, puma, age_band, sex, race_eth, education,"
+        " income_band, person_weight, record_count, citizen) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [state, puma, age, "female", "white_nh", "bachelors", "50_75k", weight, count, True],
     )
 
 

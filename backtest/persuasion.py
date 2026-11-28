@@ -145,14 +145,15 @@ def run_persuasion_graph(
     if not source_versions and not stub:
         raise RuntimeError(
             "Persona library has no loaded sources. "
-            "Run `forum personas build --state WA` first, or use --stub."
+            "Run `forum personas build --state WA --cces` first, or use --stub."
         )
     if stub and not source_versions:
         personas = _stub_personas(n_personas, state=measure.state, seed=seed)
     else:
         personas = sample_personas(con, PopulationSpec(
-            name=f"{measure.state}-adult-citizens", state=measure.state,
+            name=f"{measure.state}-likely-voters", state=measure.state,
             n=n_personas, seed=seed, source_versions=source_versions,
+            likely_voters=True,
         ))
 
     meter = CostMeter(cap_usd=budget_usd)

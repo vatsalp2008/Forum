@@ -19,8 +19,8 @@ from personas.schema import STATEWIDE_PUMA, PopulationSpec
 def _cell(con, puma, race, weight, count, state="WA"):
     con.execute(
         "INSERT INTO acs_skeleton (state, puma, age_band, sex, race_eth, education,"
-        " income_band, person_weight, record_count) VALUES (?,?,?,?,?,?,?,?,?)",
-        [state, puma, "30-44", "female", race, "bachelors", "50_75k", weight, count],
+        " income_band, person_weight, record_count, citizen) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [state, puma, "30-44", "female", race, "bachelors", "50_75k", weight, count, True],
     )
 
 
@@ -93,3 +93,11 @@ def test_backstory_names_no_puma_for_merged_cells(tmp_path):
     text = render_persona_backstory(persona)
     assert "area within the state not specified" in text
     assert "PUMA statewide" not in text
+
+
+def test_persona_ids_unique_when_one_cell_is_drawn_repeatedly(tmp_path):
+    con = _db(tmp_path)
+    _cell(con, "53001", "white_nh", weight=1000, count=50)   # the only cell
+    personas = sample_personas(con, _spec(n=50))
+    ids = [p.persona_id for p in personas]
+    assert len(set(ids)) == 50, "duplicate persona ids corrupt pre/post vote matching"

@@ -92,8 +92,11 @@ class PopulationSpec(BaseModel):
 
     name: str
     state: str
-    citizen_only: bool = True
-    adult_only: bool = True
+    citizen_only: bool = True  # exclude non-citizens (ACS CIT == 5)
+    adult_only: bool = True    # the ACS skeleton only ever holds adults (18+)
+    # Weight the pool by validated turnout propensity (CCES 2018) so the room
+    # resembles the electorate, not all adults. Backtests turn this on.
+    likely_voters: bool = False
     n: int  # number of personas to draw
     seed: int
     source_versions: dict[str, str]

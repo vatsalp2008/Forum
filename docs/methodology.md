@@ -4,7 +4,7 @@ This document is the public-facing methodology statement. It describes what FORU
 
 ## 1. What FORUM is
 
-FORUM is a multi-agent LLM system that simulates a Deliberative Polling protocol (Fishkin & Luskin, 2005; Fishkin, 2009) on a population of synthetic personas. The personas are stratified samples drawn from joint distributions of public demographic microdata (American Community Survey PUMS) with issue-position priors derived from the American National Election Studies (ANES). The output is a transcript of structured deliberation, pre/post opinion measurements per persona, and an aggregate report with confidence intervals and per-segment breakdowns.
+FORUM is a multi-agent LLM system that simulates a Deliberative Polling protocol (Fishkin & Luskin, 2005; Fishkin, 2009) on a population of synthetic personas. The personas are stratified samples drawn from joint distributions of public demographic microdata (American Community Survey PUMS), restricted to adult citizens and, for backtests, weighted toward likely voters using validated turnout (CCES 2018). Party identification comes from the American National Election Studies (ANES), calibrated to each state's partisan balance (CCES). Issue-position priors blend ANES and CCES. The output is a transcript of structured deliberation, pre/post opinion measurements per persona, and an aggregate report with confidence intervals and per-segment breakdowns.
 
 ## 2. What FORUM is not
 
@@ -17,9 +17,9 @@ FORUM is a multi-agent LLM system that simulates a Deliberative Polling protocol
 
 For a given policy question:
 
-1. **Population specification** — the user names a population (e.g. "Washington State citizen adults, ACS 2018–2022 basis"). This determines which demographic distribution the personas are drawn from.
-2. **Persona sampling** — the sampler draws N personas (default 12 for v0) proportional to the cell weights in the population's joint distribution, with k≥5 anonymity enforcement.
-3. **Prior conditioning** — each persona's issue-position prior is looked up from the ANES cross-tab table, conditioned on a coarsened set of demographic axes (party ID × education × age band).
+1. **Population specification** — the user names a population (e.g. "Washington State likely voters, ACS 2018–2022 basis"). Non-citizens (ACS `CIT` = 5) are excluded by default, since ballot measures are decided by citizens. Backtests weight the pool toward *likely voters*: each demographic cell's weight is multiplied by its validated turnout propensity, P(voted | age × education × race), estimated from the CCES 2018 vote validated against voter files (not self-report).
+2. **Persona sampling** — the sampler draws N personas (default 12 for v0) proportional to the cell weights, with k≥5 anonymity enforcement by *merging*: a cell with fewer than 5 source records is pooled with the other thin cells of the same demographic combination into a statewide cell (location generalized), and only combinations still under 5 statewide are refused. Dropping thin cells instead would not be demographically neutral, because rare combinations are disproportionately minority residents (it removed 77% of Black Washingtonians). With merging, 99.9% of the population is sampleable and every race group appears at its true share.
+3. **Prior conditioning** — party ID is drawn from the ANES conditional P(party | age × education × race), then raked per state so the state's adult-citizen pool matches that state's party balance (CCES 2018, survey-weighted). The national conditional alone made Washington personas more Republican than Democratic. Issue-position priors are then looked up from the ANES + CCES cross-tabs (party ID × education × age band), blended by cell size.
 4. **Pre-deliberation vote** — each persona emits its initial stance on the policy question with confidence.
 5. **Briefing** — the moderator agent presents a balanced briefing on the policy. The briefing's source set is documented per measure and reviewable.
 6. **Deliberation rounds** — for R rounds (default R=5), the moderator selects speakers, each speaker emits a statement, all personas listen and may update internal beliefs. A critic agent runs in parallel, fact-checking each statement against a grounded source set.
@@ -56,6 +56,8 @@ For a given policy question:
 4. **Briefing balance is model-dependent**: what counts as a "balanced" briefing depends on the moderator agent's behavior. We document the briefing source set per measure and report any flagged imbalances.
 5. **Persuasion-graph attribution**: `forum persuasion-graph` measures speaker-level influence *counterfactually* — it re-runs every persona's final vote with one speaker's statements removed and attributes the resulting stance shift to that speaker (measured, not self-reported). This is a leave-one-out counterfactual on the final vote, not a full re-deliberation, and it is speaker-level rather than statement-level; finer-grained statement-level counterfactuals remain future work.
 6. **Single model family**: v0 uses Gemini only. The harness now also supports the Anthropic/Claude family (`--provider anthropic`), so a run's model family is recorded in every report's model version (e.g. `anthropic:claude-opus-5`) and results can be compared across families. The full cross-model robustness audit — running the backtest set on both families and reporting the divergence — is v2 and requires a billed key on each provider.
+7. **Electorate model**: likely-voter weights come from 2018 (midterm) validated turnout and are applied to every measure, including the presidential-year 2012 and 2016 measures, whose electorates were larger and somewhat younger. Turnout propensities are national (age × education × race), not state-specific. Party calibration uses one survey year (CCES 2018) for all measures. Alaska has too few CCES respondents for a party target and keeps the national distribution.
+8. **Small rooms are noisy**: a single 12-persona room can draw an unrepresentative mix by chance (for example 7 of 12 Republicans in a state where the calibrated rate is about 35%). Use multi-group runs (`forum multigroup`) or several seeds before reading anything into one room.
 
 ## 6. Refusal of service — outputs that FORUM never produces
 
@@ -78,3 +80,4 @@ These refusals are encoded in the Composer Agent (input-side check) and Output S
 - Park, J. S., et al. (2024). Generative Agent Simulations of 1,000 People.
 - U.S. Census Bureau. American Community Survey Public Use Microdata Sample, 2018–2022.
 - American National Election Studies. 2020 Time Series Study.
+- Ansolabehere, S., & Schaffner, B. F. (2019). CCES Common Content, 2018. Harvard Dataverse. doi:10.7910/DVN/ZSBZ7K

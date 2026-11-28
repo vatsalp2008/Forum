@@ -81,3 +81,17 @@ This is encoded as an assertion in `personas/sample.py`. Tests verify the assert
 - U.S. Census Bureau. *American Community Survey Public Use Microdata Sample, 2018–2022 5-year*. https://www.census.gov/programs-surveys/acs/microdata.html
 - American National Election Studies. *2020 Time Series Study*. https://electionstudies.org
 - Sweeney, L. (2002). "k-anonymity: A model for protecting privacy." *International Journal on Uncertainty, Fuzziness and Knowledge-Based Systems*, 10(5).
+
+## Amendment (2026-11-25): what the sampler actually implements
+
+An audit found the shipped sampler diverged from this ADR in ways that biased every persona pool. The fixes below bring the implementation in line with the ADR's intent and record the decisions it did not anticipate.
+
+1. **Merging, not dropping, is now real.** The sampler used to drop every ACS cell with fewer than 5 records instead of merging it as the "Sampling protocol" step 2 above specifies. Dropping is not neutral: in Washington it removed 77% of Black, 64% of "other", 47% of Hispanic and 43% of Asian residents but only 8% of white residents (pool 81% white vs 69% true). The merge rule as implemented: a PUMA-level cell below k=5 is pooled with the other thin cells sharing its demographic combination into one statewide cell (location generalized; the backstory says the area is not specified), and only combinations still below k statewide are refused. WA coverage rose from 77.9% to 99.93% of population weight, and every race group now matches its true share within 0.1 point. k≥5 still holds on every attribute combination a persona reveals, and `_assert_k_anonymous` enforces it.
+2. **Citizens only.** `PopulationSpec.citizen_only` existed but the ACS loader never read citizenship. `acs_skeleton` now carries a `citizen` flag (ACS `CIT` != 5), and citizens-only is the default. Libraries built before this column existed are refused rather than guessed at; rebuild them.
+3. **CCES 2018 is now a third source**, in two new roles (it was already blended into issue priors):
+   - *Validated turnout*: `turnout_propensity` holds P(voted | age × education × race) among adult citizens, from the CCES vote validated against voter files. `PopulationSpec.likely_voters` multiplies cell weights by it. Backtests use it, because ballot outcomes are decided by voters, not by all adults.
+   - *State party balance*: `party_state_targets` holds each state's survey-weighted party-ID shares among adult citizens. The national ANES P(party | age × education × race) is raked per state to match. Without this, Washington personas came out more Republican than Democratic (46% vs 39%); calibrated, adult citizens are 49% D / 18% I / 33% R, matching the CCES target. States with fewer than 100 respondents (Alaska) keep the national distribution.
+4. **Party-ID backoff rows are honored.** `anes_loader` backs thin race cells off to their (age × education) marginal, but the sampler treated those rows as missing and drew party uniformly (8 of 100 rows). It now uses them.
+5. **Unique persona ids.** Ids now include the draw index. Two draws from one cell used to share an id, which corrupted vote matching (3% of 12-persona samples, 24% of 60-persona samples).
+
+Not implemented, and no longer planned: population YAMLs under `personas/populations/`. Populations are specified in code by `PopulationSpec`. Known limits of the electorate model are listed in methodology §5.7.
